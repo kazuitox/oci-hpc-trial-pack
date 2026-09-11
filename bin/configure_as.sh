@@ -12,6 +12,38 @@ folder=`dirname $scripts`
 execution=1
 playbooks_path=$folder/../playbooks/
 inventory_path=$folder/../autoscaling/clusters/$1
+variables_path=$inventory_path/variables.tf
+
+is_autoscaling_instance_pool_deployment()
+{
+  grep -Eq '^[[:space:]]*cluster_network[[:space:]]*=[[:space:]]*false[[:space:]]*$' "$inventory_path/inventory" \
+    && ! grep -Eq '^variable "compute_cluster".*default[[:space:]]*=[[:space:]]*true' "$variables_path"
+}
+
+synchronize_instance_pool_names_and_monitoring()
+{
+  if ! python3 "$folder/resize.py" --cluster_name "$1" --inventory "$inventory_path/inventory" sync_instance_pool_names
+  then
+    echo "Failed to synchronize Instance Pool names from final OS hostnames for $1" >&2
+    return 1
+  fi
+  if ! bash "$folder/resize.sh" --cluster_name "$1" --reconcile-monitoring
+  then
+    echo "Failed to reconcile Instance Pool monitoring names for $1" >&2
+    return 1
+  fi
+}
+
+# A journal exists only after Ansible facts were collected and OCI mutation was
+# about to begin.  On a Terraform/configure retry, finish that immutable plan
+# before any playbook can change the final OS hostname it records.
+if [ -f "$variables_path" ] \
+  && is_autoscaling_instance_pool_deployment \
+  && [ -f "$inventory_path/.instance-pool-hostname-sync.json" ]
+then
+  synchronize_instance_pool_names_and_monitoring "$1"
+  exit $?
+fi
 
 if ! python3 "$folder/resize.py" --cluster_name "$1" --inventory "$inventory_path/inventory" prepare_local_block_volume; then
   echo "Failed to prepare local Block Volume inventory for $1" >&2
@@ -36,7 +68,17 @@ fi
 
 if [[ $execution -eq 1 ]] ; then
   ANSIBLE_HOST_KEY_CHECKING=False ansible all -m setup --tree /tmp/ansible > /dev/null 2>&1
-  ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook $playbooks_path/new_nodes.yml -i $inventory_path/inventory
+  if ! ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook $playbooks_path/new_nodes.yml -i $inventory_path/inventory; then
+    echo "Failed to configure autoscaling nodes for $1" >&2
+    exit 1
+  fi
+  if [ -f "$variables_path" ] && is_autoscaling_instance_pool_deployment
+  then
+    if ! synchronize_instance_pool_names_and_monitoring "$1"
+    then
+      exit 1
+    fi
+  fi
 else
 
 	cat <<- EOF > /tmp/motd

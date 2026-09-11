@@ -112,8 +112,8 @@ resource "local_file" "inventory" {
 
 
 resource "null_resource" "configure" {
-  depends_on          = [oci_core_cluster_network.cluster_network,local_file.inventory,local_file.hosts]
+  depends_on = [oci_core_cluster_network.cluster_network,local_file.inventory,local_file.hosts,oci_dns_rrset.rrset-cluster-network-OCI,oci_dns_rrset.rrset-cluster-network-SLURM]
   provisioner "local-exec" {
-    command = "timeout 60m ${var.scripts_folder}/configure_as.sh ${local.cluster_name}"  
+    command = "timeout ${var.cluster_network || var.compute_cluster ? "60m" : "150m"} ${var.scripts_folder}/configure_as.sh ${local.cluster_name}"
   }
 }
