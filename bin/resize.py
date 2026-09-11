@@ -26,6 +26,7 @@ INSTANCE_POOL_HOSTNAME_SYNC_PLAN_FILENAME = ".instance-pool-hostname-sync.json"
 PENDING_INSTANCE_POOL_NODE_REMOVALS_FILENAME = ".pending-instance-pool-node-removals.json"
 INSTANCE_POOL_OCI_DNS_RESOURCE_ADDRESS = "oci_dns_rrset.rrset-cluster-network-OCI"
 INSTANCE_POOL_DNS_OWNERSHIP_MARKER_FILENAME = ".instance-pool-python-dns-v1"
+MANAGED_POOL_DNS_OWNERSHIP_MARKER_FILENAME = ".managed-pool-python-dns-v2"
 INSTANCE_POOL_NAME_DNS_OWNERSHIP_FILENAME = ".instance-pool-name-dns.json"
 INSTANCE_POOL_POST_RESIZE_RECOVERY_FILENAME = ".instance-pool-post-resize-recovery.json"
 RESIZE_LOCK_FILENAME = ".oci-hpc-resize.lock"
@@ -211,11 +212,11 @@ def get_instances(comp_ocid,cn_ocid,CN):
         else:
             instance_summaries = oci.pagination.list_call_get_all_results(computeManagementClient.list_instance_pool_instances,comp_ocid,cn_ocid).data
         for instance_summary in instance_summaries:
-            if CN == "IP":
+            if CN in ["IP", "CN"]:
                 # A VNIC attachment display name is optional metadata and does
                 # not identify the primary VNIC.  Resolve the full VNIC and use
                 # its is_primary flag so named primary attachments are not
-                # silently dropped from Instance Pool membership.
+                # silently dropped from managed-pool membership.
                 instance = computeClient.get_instance(instance_summary.id).data
                 private_ip = get_instance_primary_private_ip(
                     comp_ocid,
@@ -227,16 +228,6 @@ def get_instances(comp_ocid,cn_ocid,CN):
                     'ocid': instance_summary.id,
                 })
                 continue
-            try:
-                instance=computeClient.get_instance(instance_summary.id).data
-                for potential_vnic_attachment in oci.pagination.list_call_get_all_results(computeClient.list_vnic_attachments,compartment_id=comp_ocid,instance_id=instance.id).data:
-                    if potential_vnic_attachment.display_name is None:
-                        vnic_attachment = potential_vnic_attachment
-                vnic = virtualNetworkClient.get_vnic(vnic_attachment.vnic_id).data
-            except:
-                continue
-            display_name = instance_summary.display_name
-            cn_instances.append({'display_name':display_name,'ip':vnic.private_ip,'ocid':instance_summary.id})
     return cn_instances
 
 def get_active_instance_identities(compartment_id, cluster_id, cluster_type, expected_size):
@@ -617,9 +608,10 @@ def get_instance_pool_hostname_sync_plan_path(inventory_path):
     )
 
 def validate_instance_pool_hostname_sync_plan(plan):
+    plan_version = plan.get("version") if isinstance(plan, dict) else None
     if (
         not isinstance(plan, dict)
-        or plan.get("version") != 1
+        or plan_version not in [1, 2]
         or plan.get("status") != "pending"
         or not isinstance(plan.get("cluster_name"), str)
         or not plan["cluster_name"]
@@ -628,6 +620,24 @@ def validate_instance_pool_hostname_sync_plan(plan):
         or not isinstance(plan.get("members"), dict)
     ):
         raise RuntimeError("The pending Instance Pool hostname sync plan has an invalid format")
+    if plan_version == 2:
+        deployment_type = plan.get("deployment_type")
+        if deployment_type not in ["IP", "CN"]:
+            raise RuntimeError(
+                "The pending hostname sync plan has an invalid deployment_type"
+            )
+        cluster_network_id = plan.get("cluster_network_id")
+        if deployment_type == "CN" and (
+            not isinstance(cluster_network_id, str)
+            or not cluster_network_id
+        ):
+            raise RuntimeError(
+                "The pending Cluster Network hostname sync plan has an invalid cluster_network_id"
+            )
+        if deployment_type == "IP" and cluster_network_id not in [None, ""]:
+            raise RuntimeError(
+                "An Instance Pool hostname sync plan cannot reference a Cluster Network"
+            )
     normalized_hostnames = set()
     for instance_id, member in plan["members"].items():
         if not isinstance(instance_id, str) or not instance_id or not isinstance(member, dict):
@@ -877,6 +887,11 @@ def validate_instance_pool_name_dns_ownership(document):
         or not isinstance(document.get("rrsets"), list)
     ):
         raise RuntimeError("The Instance Pool DNS ownership file is malformed")
+    terraform_state_released = document.get("terraform_state_released", True)
+    if not isinstance(terraform_state_released, bool):
+        raise RuntimeError(
+            "The Instance Pool DNS ownership file has an invalid Terraform ownership state"
+        )
     seen_rrsets = set()
     for rrset in document["rrsets"]:
         if not isinstance(rrset, dict):
@@ -995,6 +1010,7 @@ def validate_instance_pool_dns_ownership_identity(
     document,
     expected_cluster_name,
     instance_pool_id,
+    require_terraform_state_released=True,
 ):
     if document is None:
         return
@@ -1004,6 +1020,13 @@ def validate_instance_pool_dns_ownership_identity(
     ):
         raise RuntimeError(
             "The Instance Pool DNS ownership file belongs to another cluster or pool"
+        )
+    if (
+        require_terraform_state_released
+        and document.get("terraform_state_released", True) is not True
+    ):
+        raise RuntimeError(
+            "The managed pool DNS ownership transfer from Terraform is incomplete"
         )
 
 def get_instance_pool_post_resize_recovery_path(inventory_path):
@@ -1165,6 +1188,207 @@ def write_text_atomic_preserving_metadata(path, contents):
         if temporary_path is not None and os.path.exists(temporary_path):
             os.unlink(temporary_path)
 
+def refuse_terraform_state_mutation_while_locked(cluster_directory):
+    """Fail immediately instead of nesting state writes inside terraform apply."""
+    lock_path = os.path.join(cluster_directory, ".terraform.tfstate.lock.info")
+    if not os.path.lexists(lock_path):
+        return
+    if os.path.islink(lock_path) or not os.path.isfile(lock_path):
+        raise RuntimeError("The Terraform state lock marker is unsafe")
+    raise RuntimeError(
+        "Terraform state is locked. Run /opt/oci-hpc/bin/resize.sh "
+        "--cluster_name <cluster_name> reconfigure after terraform apply exits"
+    )
+
+def get_terraform_managed_oci_name_dns_rrsets(
+    inventory_path,
+    state_addresses,
+    expected_zone_id,
+    expected_zone_name,
+):
+    """Read every exact canonical-name RRset selected for state release."""
+    if len(state_addresses) != len(set(state_addresses)):
+        raise RuntimeError(
+            "Terraform returned duplicate OCI-name DNS state addresses"
+        )
+    state_path = os.path.join(
+        os.path.dirname(os.path.abspath(inventory_path)),
+        "terraform.tfstate",
+    )
+    if os.path.islink(state_path) or not os.path.isfile(state_path):
+        raise RuntimeError(
+            "Terraform state was not found for OCI-name DNS ownership migration"
+        )
+    try:
+        with open(state_path, "r", encoding="utf-8") as state_file:
+            state = json.load(state_file)
+    except (OSError, ValueError) as error:
+        raise RuntimeError(
+            "Failed to read Terraform DNS state for ownership migration: "+
+            str(error)
+        )
+    rrsets_by_address = {}
+    for resource in state.get("resources", []):
+        if (
+            resource.get("mode") != "managed"
+            or resource.get("module") not in [None, ""]
+            or resource.get("type") != "oci_dns_rrset"
+            or resource.get("name") != "rrset-cluster-network-OCI"
+        ):
+            continue
+        for resource_instance in resource.get("instances", []):
+            address = INSTANCE_POOL_OCI_DNS_RESOURCE_ADDRESS
+            if "index_key" in resource_instance:
+                index_key = resource_instance["index_key"]
+                if isinstance(index_key, str):
+                    address += "["+json.dumps(index_key, separators=(",", ":"))+"]"
+                elif isinstance(index_key, int) and not isinstance(index_key, bool):
+                    address += "["+str(index_key)+"]"
+                else:
+                    raise RuntimeError(
+                        "Terraform OCI-name DNS state has an invalid index key"
+                    )
+            if address in rrsets_by_address:
+                raise RuntimeError(
+                    "Terraform state contains duplicate OCI-name DNS resource addresses"
+                )
+            attributes = resource_instance.get("attributes")
+            if not isinstance(attributes, dict):
+                raise RuntimeError(
+                    "Terraform OCI-name DNS state has invalid attributes"
+                )
+            domain = attributes.get("domain")
+            zone_id = attributes.get("zone_name_or_id")
+            items = attributes.get("items")
+            if (
+                not isinstance(domain, str)
+                or not domain
+                or zone_id != expected_zone_id
+                or attributes.get("rtype") != "A"
+                or attributes.get("scope") != "PRIVATE"
+                or not isinstance(items, list)
+                or not items
+            ):
+                raise RuntimeError(
+                    "Terraform OCI-name DNS state is not the expected private A RRset"
+                )
+            private_ips = set()
+            for item in items:
+                if (
+                    not isinstance(item, dict)
+                    or item.get("rtype") != "A"
+                    or not isinstance(item.get("domain"), str)
+                    or item["domain"].rstrip(".").lower()
+                    != domain.rstrip(".").lower()
+                ):
+                    raise RuntimeError(
+                        "Terraform OCI-name DNS state has an invalid A record"
+                    )
+                try:
+                    private_ips.add(str(ipaddress.ip_address(item.get("rdata"))))
+                except (TypeError, ValueError):
+                    raise RuntimeError(
+                        "Terraform OCI-name DNS state has an invalid private IP"
+                    )
+            rrset = {
+                "zone_id": zone_id,
+                "zone_name": expected_zone_name,
+                "domain": domain.rstrip("."),
+                "private_ips": sorted(private_ips),
+            }
+            validate_instance_pool_name_dns_ownership({
+                "version": 1,
+                "cluster_name": "state-validation",
+                "instance_pool_id": "state-validation",
+                "rrsets": [rrset],
+            })
+            rrsets_by_address[address] = rrset
+    if set(rrsets_by_address) != set(state_addresses):
+        raise RuntimeError(
+            "Terraform OCI-name DNS state addresses could not be recovered exactly"
+        )
+    return [rrsets_by_address[address] for address in state_addresses]
+
+def get_terraform_managed_slurm_dns_domains(
+    inventory_path,
+    expected_zone_id,
+):
+    """Return exact Slurm RRset domains that remain owned by Terraform."""
+    if inventory_path is None:
+        return set()
+    state_path = os.path.join(
+        os.path.dirname(os.path.abspath(inventory_path)),
+        "terraform.tfstate",
+    )
+    if not os.path.exists(state_path):
+        return set()
+    if os.path.islink(state_path) or not os.path.isfile(state_path):
+        raise RuntimeError(
+            "Terraform state is unsafe for Slurm DNS ownership inspection"
+        )
+    try:
+        with open(state_path, "r", encoding="utf-8") as state_file:
+            state = json.load(state_file)
+    except (OSError, ValueError) as error:
+        raise RuntimeError(
+            "Failed to read Terraform state for Slurm DNS ownership: "+
+            str(error)
+        )
+    domains = set()
+    for resource in state.get("resources", []):
+        if (
+            resource.get("mode") != "managed"
+            or resource.get("module") not in [None, ""]
+            or resource.get("type") != "oci_dns_rrset"
+            or resource.get("name") != "rrset-cluster-network-SLURM"
+        ):
+            continue
+        for resource_instance in resource.get("instances", []):
+            attributes = resource_instance.get("attributes")
+            if not isinstance(attributes, dict):
+                raise RuntimeError(
+                    "Terraform Slurm DNS state has invalid attributes"
+                )
+            domain = attributes.get("domain")
+            items = attributes.get("items")
+            zone_id = attributes.get("zone_name_or_id")
+            if (
+                not isinstance(domain, str)
+                or not domain
+                or not isinstance(zone_id, str)
+                or not zone_id
+                or (
+                    expected_zone_id is not None
+                    and zone_id != expected_zone_id
+                )
+                or attributes.get("rtype") != "A"
+                or attributes.get("scope") != "PRIVATE"
+                or not isinstance(items, list)
+                or not items
+            ):
+                raise RuntimeError(
+                    "Terraform Slurm DNS state is not the expected private A RRset"
+                )
+            for item in items:
+                if (
+                    not isinstance(item, dict)
+                    or item.get("rtype") != "A"
+                    or not isinstance(item.get("domain"), str)
+                    or item["domain"].rstrip(".").lower()
+                    != domain.rstrip(".").lower()
+                ):
+                    raise RuntimeError(
+                        "Terraform Slurm DNS state has an invalid A record"
+                    )
+                try:
+                    ipaddress.ip_address(item.get("rdata"))
+                except (TypeError, ValueError):
+                    raise RuntimeError(
+                        "Terraform Slurm DNS state has an invalid private IP"
+                    )
+            domains.add(domain.rstrip(".").lower())
+    return domains
+
 def migrate_instance_pool_oci_dns_ownership(
     inventory_path,
     max_wait_seconds=120,
@@ -1172,7 +1396,7 @@ def migrate_instance_pool_oci_dns_ownership(
     instance_pool_id=None,
     instances_by_id=None,
 ):
-    """Move copied, pre-feature Instance Pool OCI-name RRsets out of Terraform."""
+    """Move copied, pre-feature managed-pool OCI-name RRsets out of Terraform."""
     cluster_directory = os.path.dirname(os.path.abspath(inventory_path))
     network_path = os.path.join(cluster_directory, "network.tf")
     if not os.path.exists(network_path):
@@ -1194,7 +1418,7 @@ def migrate_instance_pool_oci_dns_ownership(
     ))
     if len(for_each_matches) != 1:
         raise RuntimeError("The OCI-name DNS resource has an unsupported for_each definition")
-    current_template_value = (
+    version_one_template_value = (
         "var.dns_entries && (var.cluster_network || var.compute_cluster) ? "
         "toset([for v in range(var.node_count) : tostring(v)]) : []"
     )
@@ -1205,29 +1429,12 @@ def migrate_instance_pool_oci_dns_ownership(
     )
     ownership_marker_path = os.path.join(
         cluster_directory,
-        INSTANCE_POOL_DNS_OWNERSHIP_MARKER_FILENAME,
+        MANAGED_POOL_DNS_OWNERSHIP_MARKER_FILENAME,
     )
-    if os.path.exists(ownership_marker_path):
-        if os.path.islink(ownership_marker_path) or not os.path.isfile(
-            ownership_marker_path
-        ):
-            raise RuntimeError(
-                "The Instance Pool DNS ownership marker is not a regular file"
-            )
-        if current_value in {current_template_value, legacy_compatible_value}:
-            return False
     legacy_value = (
         "var.dns_entries ? toset([for v in range(var.node_count) : "
         "tostring(v)]) : []"
     )
-    if current_value not in {
-        legacy_value,
-        current_template_value,
-        legacy_compatible_value,
-    }:
-        raise RuntimeError(
-            "The copied OCI-name DNS resource was customized; migrate its Terraform ownership manually"
-        )
     variables_path = os.path.join(cluster_directory, "variables.tf")
     supports_compute_cluster = False
     if os.path.isfile(variables_path):
@@ -1236,36 +1443,96 @@ def migrate_instance_pool_oci_dns_ownership(
                 r'(?m)^\s*variable\s+"compute_cluster"\s*{',
                 variables_file.read(),
             ) is not None
-    if current_value == legacy_value:
-        desired_value = (
-            current_template_value
-            if supports_compute_cluster
-            else legacy_compatible_value
+    desired_value = (
+        "var.dns_entries && var.compute_cluster ? "
+        "toset([for v in range(var.node_count) : tostring(v)]) : []"
+        if supports_compute_cluster
+        else "[]"
+    )
+    supported_values = {
+        legacy_value,
+        version_one_template_value,
+        legacy_compatible_value,
+        desired_value,
+    }
+    if current_value not in supported_values:
+        raise RuntimeError(
+            "The copied OCI-name DNS resource was customized; migrate its Terraform ownership manually"
         )
-    else:
-        desired_value = current_value
+    prior_ownership = load_instance_pool_name_dns_ownership(inventory_path)
+    ownership_transfer_is_pending = (
+        prior_ownership is not None
+        and prior_ownership.get("terraform_state_released", True) is not True
+    )
+    if os.path.exists(ownership_marker_path):
+        if os.path.islink(ownership_marker_path) or not os.path.isfile(
+            ownership_marker_path
+        ):
+            raise RuntimeError(
+                "The managed pool DNS ownership marker is not a regular file"
+            )
+        if current_value == desired_value and not ownership_transfer_is_pending:
+            return False
 
-    try:
-        listed_state = subprocess.run(
-            ["terraform", "state", "list"],
-            cwd=cluster_directory,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            universal_newlines=True,
-            timeout=max_wait_seconds,
+    legacy_ownership_marker_path = os.path.join(
+        cluster_directory,
+        INSTANCE_POOL_DNS_OWNERSHIP_MARKER_FILENAME,
+    )
+    legacy_marker_exists = os.path.lexists(legacy_ownership_marker_path)
+    if legacy_marker_exists and (
+        os.path.islink(legacy_ownership_marker_path)
+        or not os.path.isfile(legacy_ownership_marker_path)
+    ):
+        raise RuntimeError(
+            "The legacy Instance Pool DNS ownership marker is not a regular file"
         )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise RuntimeError("Failed to inspect Terraform DNS state: "+str(error))
-    if listed_state.returncode != 0:
-        detail = (listed_state.stderr or listed_state.stdout or "").strip()
-        raise RuntimeError("Failed to inspect Terraform DNS state: "+detail)
-    legacy_addresses = [
-        address for address in listed_state.stdout.splitlines()
-        if (
-            address == INSTANCE_POOL_OCI_DNS_RESOURCE_ADDRESS
-            or address.startswith(INSTANCE_POOL_OCI_DNS_RESOURCE_ADDRESS+"[")
+    migration_inventory = parse_inventory(inventory_path)
+    is_direct_instance_pool = not parse_bool(
+        get_inventory_variable(
+            migration_inventory or {},
+            "cluster_network",
+            "true",
         )
-    ]
+    )
+    # Version 1 already disabled Terraform's canonical-name RRsets for direct
+    # Instance Pools.  Upgrade those copied files and marker locally without
+    # invoking Terraform inside a Terraform provisioner.  The same shortcut
+    # is unsafe for Cluster Network, where version 1 still owned the RRsets.
+    skip_state_inspection = (
+        legacy_marker_exists
+        and is_direct_instance_pool
+        and not ownership_transfer_is_pending
+        and current_value in {
+            version_one_template_value,
+            legacy_compatible_value,
+            desired_value,
+        }
+    )
+
+    if skip_state_inspection:
+        legacy_addresses = []
+    else:
+        try:
+            listed_state = subprocess.run(
+                ["terraform", "state", "list"],
+                cwd=cluster_directory,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                timeout=max_wait_seconds,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise RuntimeError("Failed to inspect Terraform DNS state: "+str(error))
+        if listed_state.returncode != 0:
+            detail = (listed_state.stderr or listed_state.stdout or "").strip()
+            raise RuntimeError("Failed to inspect Terraform DNS state: "+detail)
+        legacy_addresses = [
+            address for address in listed_state.stdout.splitlines()
+            if (
+                address == INSTANCE_POOL_OCI_DNS_RESOURCE_ADDRESS
+                or address.startswith(INSTANCE_POOL_OCI_DNS_RESOURCE_ADDRESS+"[")
+            )
+        ]
     if legacy_addresses:
         if (
             compartment_id is None
@@ -1273,9 +1540,8 @@ def migrate_instance_pool_oci_dns_ownership(
             or instances_by_id is None
         ):
             raise RuntimeError(
-                "Instance Pool identity is required to migrate legacy DNS ownership"
+                "Managed pool identity is required to migrate legacy DNS ownership"
             )
-        migration_inventory = parse_inventory(inventory_path)
         migration_cluster_name = get_inventory_variable(
             migration_inventory,
             "cluster_name",
@@ -1289,45 +1555,101 @@ def migrate_instance_pool_oci_dns_ownership(
             compartment_id,
             migration_zone_name,
         )
-        prior_ownership = load_instance_pool_name_dns_ownership(inventory_path)
         if prior_ownership is not None:
             validate_instance_pool_dns_ownership_identity(
                 prior_ownership,
                 migration_cluster_name,
                 instance_pool_id,
+                require_terraform_state_released=False,
             )
+        terraform_rrsets = get_terraform_managed_oci_name_dns_rrsets(
+            inventory_path,
+            legacy_addresses,
+            migration_zone_id,
+            migration_zone_name,
+        )
+        for rrset in terraform_rrsets:
+            verify_private_dns_a_rrset_ownership(
+                rrset["zone_id"],
+                rrset["domain"],
+                rrset["private_ips"],
+            )
+        terraform_rrsets_by_domain = {}
+        for rrset in terraform_rrsets:
+            domain_key = rrset["domain"].lower()
+            if domain_key in terraform_rrsets_by_domain:
+                raise RuntimeError(
+                    "Terraform OCI-name DNS state contains duplicate domains"
+                )
+            terraform_rrsets_by_domain[domain_key] = rrset
+        live_derived_rrsets = []
+        for instance in instances_by_id.values():
+            display_name = instance.get("display_name")
+            if not isinstance(display_name, str) or not display_name:
+                raise RuntimeError(
+                    "A managed pool member has an invalid display name during DNS migration"
+                )
+            expected_domain = (
+                display_name+"."+migration_zone_name
+            ).lower()
+            try:
+                private_ip = str(ipaddress.ip_address(instance.get("ip")))
+            except (TypeError, ValueError):
+                raise RuntimeError(
+                    "A managed pool member has an invalid private IP during DNS migration"
+                )
+            state_rrset = terraform_rrsets_by_domain.get(expected_domain)
+            if (
+                state_rrset is not None
+                and set(state_rrset["private_ips"]) != {private_ip}
+            ):
+                raise RuntimeError(
+                    "Terraform OCI-name DNS state disagrees with the current managed pool membership"
+                )
+            if state_rrset is None:
+                domain = display_name+"."+migration_zone_name
+                existing_ips = verify_private_dns_a_rrset_ownership(
+                    migration_zone_id,
+                    domain,
+                    {private_ip},
+                )
+                live_derived_rrsets.append({
+                    "zone_id": migration_zone_id,
+                    "zone_name": migration_zone_name,
+                    "domain": domain,
+                    "private_ips": sorted(existing_ips or {private_ip}),
+                })
         migration_rrsets = {
             (rrset["zone_id"], rrset["domain"].lower()): rrset
             for rrset in (
                 prior_ownership["rrsets"] if prior_ownership is not None else []
             )
         }
-        for instance in instances_by_id.values():
-            domain = instance["display_name"]+"."+migration_zone_name
-            private_ip = str(ipaddress.ip_address(instance["ip"]))
-            existing_ips = verify_private_dns_a_rrset_ownership(
-                migration_zone_id,
-                domain,
-                {private_ip},
-            )
-            migration_rrsets[(migration_zone_id, domain.lower())] = {
-                "zone_id": migration_zone_id,
-                "zone_name": migration_zone_name,
-                "domain": domain,
-                "private_ips": sorted(existing_ips or {private_ip}),
-            }
+        for rrset in terraform_rrsets+live_derived_rrsets:
+            rrset_key = (rrset["zone_id"], rrset["domain"].lower())
+            if (
+                rrset_key in migration_rrsets
+                and migration_rrsets[rrset_key] != rrset
+            ):
+                raise RuntimeError(
+                    "Terraform and Python DNS ownership records disagree"
+                )
+            migration_rrsets[rrset_key] = rrset
         # Seed exact domain/IP ownership before releasing Terraform state.  If
         # interrupted after state rm, cleanup and retry still know every
         # unmanaged legacy RRset.
+        migration_ownership = {
+            "version": 1,
+            "cluster_name": migration_cluster_name,
+            "instance_pool_id": instance_pool_id,
+            "terraform_state_released": False,
+            "rrsets": list(migration_rrsets.values()),
+        }
         write_instance_pool_name_dns_ownership(
             inventory_path,
-            {
-                "version": 1,
-                "cluster_name": migration_cluster_name,
-                "instance_pool_id": instance_pool_id,
-                "rrsets": list(migration_rrsets.values()),
-            },
+            migration_ownership,
         )
+        refuse_terraform_state_mutation_while_locked(cluster_directory)
         try:
             removed_state = subprocess.run(
                 ["terraform", "state", "rm", "-lock-timeout=60s"]+legacy_addresses,
@@ -1342,6 +1664,32 @@ def migrate_instance_pool_oci_dns_ownership(
         if removed_state.returncode != 0:
             detail = (removed_state.stderr or removed_state.stdout or "").strip()
             raise RuntimeError("Failed to release Terraform OCI-name DNS ownership: "+detail)
+        migration_ownership["terraform_state_released"] = True
+        write_instance_pool_name_dns_ownership(
+            inventory_path,
+            migration_ownership,
+        )
+    elif ownership_transfer_is_pending:
+        if compartment_id is None or instance_pool_id is None:
+            raise RuntimeError(
+                "Managed pool identity is required to finish legacy DNS ownership migration"
+            )
+        migration_cluster_name = get_inventory_variable(
+            migration_inventory,
+            "cluster_name",
+        )
+        validate_instance_pool_dns_ownership_identity(
+            prior_ownership,
+            migration_cluster_name,
+            instance_pool_id,
+            require_terraform_state_released=False,
+        )
+        released_ownership = dict(prior_ownership)
+        released_ownership["terraform_state_released"] = True
+        write_instance_pool_name_dns_ownership(
+            inventory_path,
+            released_ownership,
+        )
 
     if desired_value != current_value:
         match = for_each_matches[0]
@@ -1363,7 +1711,7 @@ def migrate_instance_pool_oci_dns_ownership(
     )
     try:
         with os.fdopen(marker_fd, "w", encoding="utf-8") as marker_file:
-            marker_file.write("python-owned-canonical-dns-v1\n")
+            marker_file.write("python-owned-canonical-dns-v2\n")
             marker_file.flush()
             os.fsync(marker_file.fileno())
         inventory_stat = os.stat(inventory_path)
@@ -1390,6 +1738,105 @@ def migrate_instance_pool_oci_dns_ownership(
         ):
             os.unlink(temporary_marker_path)
     return True
+
+def finish_pending_managed_pool_dns_ownership_transfer(
+    inventory_path,
+    ownership,
+    expected_cluster_name,
+    instance_pool_id,
+    max_wait_seconds=120,
+):
+    """Finish a journaled Terraform state release before DNS cleanup."""
+    validate_instance_pool_dns_ownership_identity(
+        ownership,
+        expected_cluster_name,
+        instance_pool_id,
+        require_terraform_state_released=False,
+    )
+    if ownership.get("terraform_state_released", True) is True:
+        return ownership
+    cluster_directory = os.path.dirname(os.path.abspath(inventory_path))
+    try:
+        listed_state = subprocess.run(
+            ["terraform", "state", "list"],
+            cwd=cluster_directory,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            timeout=max_wait_seconds,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError(
+            "Failed to inspect pending Terraform DNS ownership: "+str(error)
+        )
+    if listed_state.returncode != 0:
+        detail = (listed_state.stderr or listed_state.stdout or "").strip()
+        raise RuntimeError(
+            "Failed to inspect pending Terraform DNS ownership: "+detail
+        )
+    managed_addresses = [
+        address for address in listed_state.stdout.splitlines()
+        if (
+            address == INSTANCE_POOL_OCI_DNS_RESOURCE_ADDRESS
+            or address.startswith(INSTANCE_POOL_OCI_DNS_RESOURCE_ADDRESS+"[")
+        )
+    ]
+    if managed_addresses:
+        ownership_zone_ids = {
+            rrset["zone_id"] for rrset in ownership["rrsets"]
+        }
+        ownership_zone_names = {
+            rrset["zone_name"] for rrset in ownership["rrsets"]
+        }
+        if len(ownership_zone_ids) != 1 or len(ownership_zone_names) != 1:
+            raise RuntimeError(
+                "Pending DNS ownership does not identify one private zone"
+            )
+        remaining_state_rrsets = get_terraform_managed_oci_name_dns_rrsets(
+            inventory_path,
+            managed_addresses,
+            next(iter(ownership_zone_ids)),
+            next(iter(ownership_zone_names)),
+        )
+        ownership_rrsets = {
+            (rrset["zone_id"], rrset["domain"].lower()): rrset
+            for rrset in ownership["rrsets"]
+        }
+        for rrset in remaining_state_rrsets:
+            ownership_rrset = ownership_rrsets.get(
+                (rrset["zone_id"], rrset["domain"].lower())
+            )
+            if ownership_rrset != rrset:
+                raise RuntimeError(
+                    "Pending DNS ownership no longer matches Terraform state"
+                )
+        refuse_terraform_state_mutation_while_locked(cluster_directory)
+        try:
+            removed_state = subprocess.run(
+                ["terraform", "state", "rm", "-lock-timeout=60s"]+
+                managed_addresses,
+                cwd=cluster_directory,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                timeout=max_wait_seconds,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise RuntimeError(
+                "Failed to finish Terraform DNS ownership release: "+str(error)
+            )
+        if removed_state.returncode != 0:
+            detail = (removed_state.stderr or removed_state.stdout or "").strip()
+            raise RuntimeError(
+                "Failed to finish Terraform DNS ownership release: "+detail
+            )
+    released_ownership = dict(ownership)
+    released_ownership["terraform_state_released"] = True
+    write_instance_pool_name_dns_ownership(
+        inventory_path,
+        released_ownership,
+    )
+    return released_ownership
 
 def collect_instance_pool_os_hostnames(inventory_path, max_wait_seconds=1800):
     inventory_dict = parse_inventory(inventory_path)
@@ -1611,7 +2058,14 @@ def get_complete_instance_pool_instances(
             for member in member_summaries
         ]
         members_are_ready = (
-            len(member_ids) == len(member_summaries)
+            isinstance(desired_size, int)
+            and not isinstance(desired_size, bool)
+            and desired_size >= 0
+            and (
+                current_size is None
+                or current_size == desired_size
+            )
+            and len(member_ids) == len(member_summaries)
             and len(member_summaries) == desired_size
             and all(
                 (
@@ -1695,6 +2149,149 @@ def get_complete_instance_pool_instances(
             )
         time.sleep(min(2, max(0, deadline-time.time())))
 
+def get_complete_cluster_network_instances(
+    compartment_id,
+    cluster_network_id,
+    instance_pool_id,
+    expected_cluster_name,
+    max_wait_seconds=60,
+):
+    """Return one stable snapshot shared by the parent CN and embedded pool."""
+    deadline = time.time()+max_wait_seconds
+    retry_kwargs = get_oci_retry_kwargs()
+    last_observation = "no Cluster Network response was received"
+    while True:
+        cluster_network = computeManagementClient.get_cluster_network(
+            cluster_network_id,
+            **retry_kwargs,
+        ).data
+        embedded_pools = list(
+            getattr(cluster_network, "instance_pools", None) or []
+        )
+        if (
+            getattr(cluster_network, "id", cluster_network_id)
+            != cluster_network_id
+            or getattr(cluster_network, "compartment_id", None)
+            != compartment_id
+            or getattr(cluster_network, "display_name", None)
+            != expected_cluster_name
+            or len(embedded_pools) != 1
+            or getattr(embedded_pools[0], "id", None) != instance_pool_id
+        ):
+            raise RuntimeError(
+                "The Cluster Network identity or embedded Instance Pool does not match this cluster"
+            )
+        network_state = normalize_oci_state(
+            getattr(cluster_network, "lifecycle_state", None)
+        )
+        embedded_pool = embedded_pools[0]
+        embedded_size = getattr(embedded_pool, "size", None)
+        instance_pool = computeManagementClient.get_instance_pool(
+            instance_pool_id,
+            **retry_kwargs,
+        ).data
+        pool_state = normalize_oci_state(
+            getattr(instance_pool, "lifecycle_state", None)
+        )
+        pool_size = getattr(instance_pool, "size", None)
+        pool_current_size = getattr(instance_pool, "current_size", None)
+        if (
+            getattr(instance_pool, "id", instance_pool_id) != instance_pool_id
+            or getattr(instance_pool, "compartment_id", None) != compartment_id
+            or getattr(instance_pool, "display_name", None)
+            != expected_cluster_name
+        ):
+            raise RuntimeError(
+                "The Cluster Network embedded Instance Pool identity does not match this cluster"
+            )
+        snapshots_are_ready = (
+            network_state == "RUNNING"
+            and pool_state == "RUNNING"
+            and isinstance(pool_size, int)
+            and not isinstance(pool_size, bool)
+            and pool_size >= 0
+            and (
+                pool_current_size is None
+                or pool_current_size == pool_size
+            )
+            and (
+                embedded_size is None
+                or (
+                    isinstance(embedded_size, int)
+                    and not isinstance(embedded_size, bool)
+                    and embedded_size == pool_size
+                )
+            )
+        )
+        if snapshots_are_ready:
+            remaining_seconds = max(0, deadline-time.time())
+            try:
+                instances, instances_by_id = (
+                    get_complete_instance_pool_instances(
+                        compartment_id,
+                        instance_pool_id,
+                        max_wait_seconds=remaining_seconds,
+                    )
+                )
+            except RuntimeError as error:
+                raise RuntimeError(
+                    "The Cluster Network embedded Instance Pool is incomplete: "+
+                    str(error)
+                )
+        else:
+            instances = []
+            instances_by_id = {}
+
+        cluster_members = oci.pagination.list_call_get_all_results(
+            computeManagementClient.list_cluster_network_instances,
+            compartment_id=compartment_id,
+            cluster_network_id=cluster_network_id,
+            **retry_kwargs,
+        ).data
+        cluster_member_ids = {
+            getattr(member, "id", None) for member in cluster_members
+        }
+        cluster_member_states = [
+            str(getattr(member, "state", None)) for member in cluster_members
+        ]
+        cluster_members_are_ready = (
+            None not in cluster_member_ids
+            and len(cluster_member_ids) == len(cluster_members)
+            and len(cluster_members) == pool_size
+            and all(
+                normalize_oci_state(getattr(member, "state", None))
+                == "RUNNING"
+                and normalize_oci_state(
+                    getattr(member, "lifecycle_state", None)
+                ) in [None, "ACTIVE"]
+                and getattr(member, "compartment_id", compartment_id)
+                == compartment_id
+                for member in cluster_members
+            )
+        )
+        if (
+            snapshots_are_ready
+            and cluster_members_are_ready
+            and cluster_member_ids == set(instances_by_id)
+        ):
+            return instances, instances_by_id
+        last_observation = (
+            "network_state="+str(getattr(cluster_network, "lifecycle_state", None))+
+            ", pool_state="+str(getattr(instance_pool, "lifecycle_state", None))+
+            ", pool_size="+str(pool_size)+
+            ", pool_current_size="+str(pool_current_size)+
+            ", embedded_size="+str(embedded_size)+
+            ", cluster_member_count="+str(len(cluster_members))+
+            ", cluster_member_states="+repr(sorted(cluster_member_states))+
+            ", pool_member_count="+str(len(instances_by_id))
+        )
+        if time.time() >= deadline:
+            raise RuntimeError(
+                "The Cluster Network member list is incomplete ("+
+                last_observation+")"
+            )
+        time.sleep(min(2, max(0, deadline-time.time())))
+
 def update_instance_pool_display_names(
     compartment_id,
     instance_pool_id,
@@ -1703,19 +2300,30 @@ def update_instance_pool_display_names(
     max_wait_seconds=60,
     before_updates=None,
     expected_private_ips_by_instance_id=None,
+    cluster_network_id=None,
 ):
     if not desired_names_by_instance_id:
         if before_updates is not None:
             before_updates({})
         return {}
     retry_kwargs = get_oci_retry_kwargs()
-    summaries = oci.pagination.list_call_get_all_results(
-        computeManagementClient.list_instance_pool_instances,
-        compartment_id=compartment_id,
-        instance_pool_id=instance_pool_id,
-        **retry_kwargs,
-    ).data
-    pool_member_ids = {summary.id for summary in summaries}
+    if cluster_network_id is not None:
+        _, cluster_instances_by_id = get_complete_cluster_network_instances(
+            compartment_id,
+            cluster_network_id,
+            instance_pool_id,
+            expected_cluster_name,
+            max_wait_seconds=max_wait_seconds,
+        )
+        pool_member_ids = set(cluster_instances_by_id)
+    else:
+        summaries = oci.pagination.list_call_get_all_results(
+            computeManagementClient.list_instance_pool_instances,
+            compartment_id=compartment_id,
+            instance_pool_id=instance_pool_id,
+            **retry_kwargs,
+        ).data
+        pool_member_ids = {summary.id for summary in summaries}
     if pool_member_ids != set(desired_names_by_instance_id):
         raise RuntimeError(
             "Inventory instances are not active members of the exact Instance Pool membership; "
@@ -1779,12 +2387,10 @@ def update_instance_pool_display_names(
             instance_id,
             require_explicit_primary=True,
         )
-        vnic_compartment_id = getattr(primary_vnic, "compartment_id", None)
-        if vnic_compartment_id != compartment_id:
-            raise RuntimeError(
-                "Primary VNIC "+primary_vnic_id+
-                " does not belong to the expected compartment"
-            )
+        # A VNIC belongs to its subnet's compartment, which can differ from
+        # the instance compartment when an existing shared VCN is used.  The
+        # ATTACHED attachment, exact VNIC OCID, is_primary flag, and private IP
+        # checks above/below establish identity without rejecting that layout.
         vnic_lifecycle_state = normalize_oci_state(
             getattr(primary_vnic, "lifecycle_state", None)
         )
@@ -1815,6 +2421,37 @@ def update_instance_pool_display_names(
             primary_vnic,
             primary_vnic_etag,
         )
+
+    if cluster_network_id is not None:
+        _, final_cluster_instances_by_id = get_complete_cluster_network_instances(
+            compartment_id,
+            cluster_network_id,
+            instance_pool_id,
+            expected_cluster_name,
+            max_wait_seconds=max_wait_seconds,
+        )
+        if set(final_cluster_instances_by_id) != set(desired_names_by_instance_id):
+            raise RuntimeError(
+                "Cluster Network membership changed after display name preflight"
+            )
+        for instance_id, current_instance in current_instances.items():
+            if (
+                final_cluster_instances_by_id[instance_id]["display_name"]
+                != current_instance.display_name
+            ):
+                raise RuntimeError(
+                    "Cluster Network instance names changed after display name preflight"
+                )
+        if expected_private_ips_by_instance_id is not None:
+            for instance_id, expected_private_ip in (
+                expected_private_ips_by_instance_id.items()
+            ):
+                if str(ipaddress.ip_address(
+                    final_cluster_instances_by_id[instance_id]["ip"]
+                )) != str(ipaddress.ip_address(expected_private_ip)):
+                    raise RuntimeError(
+                        "Cluster Network Primary VNIC private IP changed after preflight"
+                    )
 
     previous_names = {
         instance_id: instance.display_name
@@ -1917,6 +2554,41 @@ def update_instance_pool_display_names(
                         instance_id
                     )
                 time.sleep(2)
+    if cluster_network_id is not None:
+        # Keep the durable plan until the parent CN and its embedded pool are
+        # stable with the exact membership, IPs, and final Instance names.  A
+        # scale started outside this process after the preflight must not let
+        # the caller commit stale DNS or Inventory data.
+        _, updated_cluster_instances_by_id = (
+            get_complete_cluster_network_instances(
+                compartment_id,
+                cluster_network_id,
+                instance_pool_id,
+                expected_cluster_name,
+                max_wait_seconds=max_wait_seconds,
+            )
+        )
+        if set(updated_cluster_instances_by_id) != set(
+            desired_names_by_instance_id
+        ):
+            raise RuntimeError(
+                "Cluster Network membership changed during display name updates"
+            )
+        for instance_id, desired_name in desired_names_by_instance_id.items():
+            updated_member = updated_cluster_instances_by_id[instance_id]
+            if updated_member["display_name"] != desired_name:
+                raise RuntimeError(
+                    "Cluster Network Instance name did not remain stable after updates"
+                )
+            if expected_private_ips_by_instance_id is not None and (
+                str(ipaddress.ip_address(updated_member["ip"]))
+                != str(ipaddress.ip_address(
+                    expected_private_ips_by_instance_id[instance_id]
+                ))
+            ):
+                raise RuntimeError(
+                    "Cluster Network Primary VNIC private IP changed during display name updates"
+                )
     return previous_names
 
 def rewrite_instance_pool_inventory_names(
@@ -2319,6 +2991,7 @@ def get_tracked_instance_pool_id(inventory_path):
     for resource in state.get("resources", []):
         if (
             resource.get("mode") != "managed"
+            or resource.get("module") not in [None, ""]
             or resource.get("type") != "oci_core_instance_pool"
             or resource.get("name") != "instance_pool"
         ):
@@ -2330,6 +3003,96 @@ def get_tracked_instance_pool_id(inventory_path):
     if len(instance_pool_ids) > 1:
         raise RuntimeError("Terraform state contains multiple Instance Pool identities")
     return next(iter(instance_pool_ids), None)
+
+def get_tracked_cluster_network_state_identity(inventory_path):
+    state_path = os.path.join(
+        os.path.dirname(os.path.abspath(inventory_path)),
+        "terraform.tfstate",
+    )
+    if not os.path.isfile(state_path):
+        return None, None
+    try:
+        with open(state_path, "r", encoding="utf-8") as state_file:
+            state = json.load(state_file)
+    except (OSError, ValueError) as error:
+        raise RuntimeError(
+            "Failed to read Terraform state for Cluster Network identity: "+
+            str(error)
+        )
+    cluster_network_ids = set()
+    embedded_instance_pool_ids = set()
+    for resource in state.get("resources", []):
+        if (
+            resource.get("mode") != "managed"
+            or resource.get("module") not in [None, ""]
+            or resource.get("type") != "oci_core_cluster_network"
+            or resource.get("name") != "cluster_network"
+        ):
+            continue
+        for resource_instance in resource.get("instances", []):
+            attributes = resource_instance.get("attributes", {})
+            cluster_network_id = attributes.get("id")
+            if cluster_network_id:
+                cluster_network_ids.add(cluster_network_id)
+            for embedded_pool in attributes.get("instance_pools", []) or []:
+                if isinstance(embedded_pool, dict) and embedded_pool.get("id"):
+                    embedded_instance_pool_ids.add(embedded_pool["id"])
+    if len(cluster_network_ids) > 1:
+        raise RuntimeError(
+            "Terraform state contains multiple Cluster Network identities"
+        )
+    if len(embedded_instance_pool_ids) > 1:
+        raise RuntimeError(
+            "Terraform state contains multiple embedded Instance Pool identities"
+        )
+    if not cluster_network_ids and embedded_instance_pool_ids:
+        raise RuntimeError(
+            "Terraform state contains an incomplete Cluster Network identity"
+        )
+    return (
+        next(iter(cluster_network_ids), None),
+        next(iter(embedded_instance_pool_ids), None),
+    )
+
+def get_tracked_cluster_network_id(inventory_path):
+    cluster_network_id, _ = get_tracked_cluster_network_state_identity(
+        inventory_path
+    )
+    return cluster_network_id
+
+def has_tracked_compute_cluster_resources(tracked_resources):
+    return (
+        tracked_resources is not None
+        and (
+            tracked_resources[0] is not None
+            or bool(tracked_resources[1])
+        )
+    )
+
+def get_tracked_managed_instance_pool_id(inventory_path):
+    direct_instance_pool_id = get_tracked_instance_pool_id(inventory_path)
+    cluster_network_id, embedded_instance_pool_id = (
+        get_tracked_cluster_network_state_identity(inventory_path)
+    )
+    compute_cluster_resources = get_tracked_compute_cluster_resources(
+        inventory_path
+    )
+    compute_cluster_is_present = has_tracked_compute_cluster_resources(
+        compute_cluster_resources
+    )
+    tracked_deployment_count = sum(
+        deployment_is_present
+        for deployment_is_present in [
+            direct_instance_pool_id is not None,
+            cluster_network_id is not None,
+            compute_cluster_is_present,
+        ]
+    )
+    if tracked_deployment_count > 1:
+        raise RuntimeError(
+            "Terraform state identifies multiple compute deployment types"
+        )
+    return direct_instance_pool_id or embedded_instance_pool_id
 
 def get_tracked_instance_pool_for_hostname_sync(
     inventory_path,
@@ -2357,6 +3120,76 @@ def get_tracked_instance_pool_for_hostname_sync(
             "The Terraform-tracked Instance Pool identity does not match this cluster"
         )
     return instance_pool
+
+def get_tracked_cluster_network_for_hostname_sync(
+    inventory_path,
+    compartment_id,
+    expected_display_name,
+    require_running=True,
+):
+    cluster_network_id, state_instance_pool_id = (
+        get_tracked_cluster_network_state_identity(inventory_path)
+    )
+    if cluster_network_id is None or state_instance_pool_id is None:
+        raise RuntimeError(
+            "Terraform state does not identify the complete Cluster Network "
+            "and embedded Instance Pool for hostname synchronization"
+        )
+    cluster_network = computeManagementClient.get_cluster_network(
+        cluster_network_id,
+        **get_oci_retry_kwargs(),
+    ).data
+    network_state = normalize_oci_state(
+        getattr(cluster_network, "lifecycle_state", None)
+    )
+    embedded_pools = list(
+        getattr(cluster_network, "instance_pools", None) or []
+    )
+    if (
+        getattr(cluster_network, "id", cluster_network_id)
+        != cluster_network_id
+        or getattr(cluster_network, "compartment_id", None) != compartment_id
+        or getattr(cluster_network, "display_name", None)
+        != expected_display_name
+        or len(embedded_pools) != 1
+        or (
+            require_running
+            and network_state != "RUNNING"
+        )
+        or (
+            not require_running
+            and network_state not in ["RUNNING", "SCALING"]
+        )
+        or network_state in ["TERMINATING", "TERMINATED", "FAILED"]
+    ):
+        raise RuntimeError(
+            "The Terraform-tracked Cluster Network identity is not a stable match for this cluster"
+        )
+    embedded_pool = embedded_pools[0]
+    embedded_pool_id = getattr(embedded_pool, "id", None)
+    embedded_pool_state = normalize_oci_state(
+        getattr(embedded_pool, "lifecycle_state", None)
+    )
+    if (
+        not embedded_pool_id
+        or (
+            state_instance_pool_id is not None
+            and embedded_pool_id != state_instance_pool_id
+        )
+        or getattr(embedded_pool, "compartment_id", compartment_id)
+        != compartment_id
+        or getattr(embedded_pool, "display_name", expected_display_name)
+        != expected_display_name
+        or (
+            require_running
+            and embedded_pool_state not in [None, "RUNNING"]
+        )
+        or embedded_pool_state in ["TERMINATING", "TERMINATED", "FAILED"]
+    ):
+        raise RuntimeError(
+            "The Terraform-tracked Cluster Network does not contain exactly the expected Instance Pool"
+        )
+    return cluster_network, embedded_pool
 
 def get_vnic_private_ip(vnic, instance_id):
     try:
@@ -2769,8 +3602,13 @@ def cleanup_instance_pool_name_dns_records(
     inventory_path=None,
 ):
     expected_cluster_name = get_inventory_variable(inventory_dict, "cluster_name")
+    tracked_cluster_network_id = (
+        get_tracked_cluster_network_id(inventory_path)
+        if inventory_path is not None
+        else None
+    )
     tracked_pool_id = (
-        get_tracked_instance_pool_id(inventory_path)
+        get_tracked_managed_instance_pool_id(inventory_path)
         if inventory_path is not None
         else None
     )
@@ -2779,46 +3617,6 @@ def cleanup_instance_pool_name_dns_records(
         if inventory_path is not None
         else None
     )
-    if ownership is not None:
-        ownership_pool_id = tracked_pool_id or ownership["instance_pool_id"]
-        validate_instance_pool_dns_ownership_identity(
-            ownership,
-            expected_cluster_name,
-            ownership_pool_id,
-        )
-        for rrset in ownership["rrsets"]:
-            verify_private_dns_a_rrset_ownership(
-                rrset["zone_id"],
-                rrset["domain"],
-                rrset["private_ips"],
-            )
-        for rrset in ownership["rrsets"]:
-            delete_private_dns_a_rrset_if_owned(
-                rrset["zone_id"],
-                rrset["domain"],
-                rrset["private_ips"],
-            )
-        write_instance_pool_name_dns_ownership(inventory_path, None)
-    if not parse_bool(get_inventory_variable(inventory_dict, "dns_entries", "true")):
-        return
-    dns_zone_name = get_inventory_variable(
-        inventory_dict,
-        "zone_name",
-        get_inventory_variable(inventory_dict, "cluster_name")+".local",
-    )
-    zones = dns_client.list_zones(
-        compartment_id=compartment_id,
-        name=dns_zone_name,
-        zone_type="PRIMARY",
-        scope="PRIVATE",
-    ).data
-    if len(zones) == 0:
-        return
-    if len(zones) != 1:
-        raise RuntimeError(
-            "Multiple private DNS zones named "+dns_zone_name+
-            " were found; refusing ambiguous cleanup"
-        )
     hostnames = set()
     private_ips = set()
     private_ips_by_instance_id = {}
@@ -2838,7 +3636,6 @@ def cleanup_instance_pool_name_dns_records(
                     if instance_id:
                         private_ips_by_instance_id[instance_id] = private_ip
     pending_plan = None
-    pending_removal_domains = set()
     pending_removal_pool_ids = set()
     if inventory_path is not None:
         pending_plan = load_instance_pool_hostname_sync_plan(inventory_path)
@@ -2850,6 +3647,53 @@ def cleanup_instance_pool_name_dns_records(
                 "The pending Instance Pool hostname sync plan belongs to another cluster"
             )
         if pending_plan is not None:
+            if (
+                pending_plan.get("version") == 2
+                and pending_plan.get("deployment_type") == "CN"
+                and tracked_cluster_network_id is not None
+                and pending_plan.get("cluster_network_id")
+                != tracked_cluster_network_id
+            ):
+                raise RuntimeError(
+                    "The pending hostname sync plan belongs to another Cluster Network"
+                )
+            if (
+                pending_plan.get("version") == 2
+                and pending_plan.get("deployment_type") == "CN"
+                and tracked_cluster_network_id is None
+            ):
+                pending_cluster_network_id = pending_plan["cluster_network_id"]
+                try:
+                    pending_cluster_network = (
+                        computeManagementClient.get_cluster_network(
+                            pending_cluster_network_id,
+                            **get_oci_retry_kwargs(),
+                        ).data
+                    )
+                except oci.exceptions.ServiceError as error:
+                    if error.status != 404:
+                        raise
+                else:
+                    if (
+                        getattr(
+                            pending_cluster_network,
+                            "id",
+                            pending_cluster_network_id,
+                        ) != pending_cluster_network_id
+                        or getattr(
+                            pending_cluster_network,
+                            "compartment_id",
+                            None,
+                        ) != compartment_id
+                        or getattr(
+                            pending_cluster_network,
+                            "display_name",
+                            None,
+                        ) != expected_cluster_name
+                    ):
+                        raise RuntimeError(
+                            "The pending hostname sync plan has invalid Cluster Network ownership"
+                        )
             for instance_id, member in pending_plan["members"].items():
                 hostnames.update({
                     member["hostname"],
@@ -2869,22 +3713,31 @@ def cleanup_instance_pool_name_dns_records(
             hostnames.update(removal["instance_names"])
             private_ips.add(removal["private_ip"])
             private_ips_by_instance_id[removal["instance_id"]] = removal["private_ip"]
-            pending_removal_domains.update(removal["dns_domains"])
             pending_removal_pool_ids.add(removal["instance_pool_id"])
     if len(pending_removal_pool_ids) > 1:
         raise RuntimeError("Pending node removals belong to multiple Instance Pools")
     journal_pool_ids = set(pending_removal_pool_ids)
     if pending_plan is not None:
         journal_pool_ids.add(pending_plan["instance_pool_id"])
+    ownership_pool_id = None
+    if ownership is not None:
+        ownership_pool_id = tracked_pool_id or ownership["instance_pool_id"]
+        validate_instance_pool_dns_ownership_identity(
+            ownership,
+            expected_cluster_name,
+            ownership_pool_id,
+            require_terraform_state_released=False,
+        )
+    authoritative_pool_id = tracked_pool_id or ownership_pool_id
     if len(journal_pool_ids) > 1 or (
-        tracked_pool_id is not None
+        authoritative_pool_id is not None
         and journal_pool_ids
-        and tracked_pool_id not in journal_pool_ids
+        and authoritative_pool_id not in journal_pool_ids
     ):
         raise RuntimeError(
             "Pending Instance Pool work belongs to another pool"
         )
-    exact_pool_id = tracked_pool_id or (
+    exact_pool_id = authoritative_pool_id or (
         next(iter(journal_pool_ids)) if journal_pool_ids else None
     )
     active_pool = None
@@ -2904,7 +3757,17 @@ def cleanup_instance_pool_name_dns_records(
                 raise RuntimeError("The Terraform-tracked Instance Pool has invalid ownership")
             if candidate_pool.lifecycle_state not in ["TERMINATED", "FAILED"]:
                 active_pool = candidate_pool
-    if active_pool is not None:
+    dns_cleanup_enabled = parse_bool(
+        get_inventory_variable(inventory_dict, "dns_entries", "true")
+    )
+    slurm_cleanup_enabled = (
+        dns_cleanup_enabled
+        and parse_bool(get_inventory_variable(inventory_dict, "slurm", "false"))
+    )
+    use_fallback_discovery = ownership is None and dns_cleanup_enabled
+    if active_pool is not None and (
+        use_fallback_discovery or slurm_cleanup_enabled
+    ):
         member_summaries = oci.pagination.list_call_get_all_results(
             computeManagementClient.list_instance_pool_instances,
             compartment_id=compartment_id,
@@ -2932,24 +3795,111 @@ def cleanup_instance_pool_name_dns_records(
                 )
                 private_ips.add(private_ip)
                 private_ips_by_instance_id[member_summary.id] = private_ip
-    domains = (
-        {hostname+"."+dns_zone_name for hostname in hostnames}
-        |pending_removal_domains
+
+    terraform_slurm_domains = get_terraform_managed_slurm_dns_domains(
+        inventory_path,
+        None,
     )
-    for private_ip in private_ips:
-        slurm_domain = get_instance_pool_slurm_dns_domain(
+    fallback_rrsets_by_key = {}
+    if use_fallback_discovery or slurm_cleanup_enabled:
+        dns_zone_name = get_inventory_variable(
             inventory_dict,
-            private_ip,
-            dns_zone_name,
+            "zone_name",
+            get_inventory_variable(inventory_dict, "cluster_name")+".local",
         )
-        if slurm_domain is not None:
-            domains.add(slurm_domain)
-    for domain in domains:
-        delete_private_dns_a_rrset_if_owned(
-            zones[0].id,
+        zones = dns_client.list_zones(
+            compartment_id=compartment_id,
+            name=dns_zone_name,
+            zone_type="PRIMARY",
+            scope="PRIVATE",
+        ).data
+        if len(zones) > 1:
+            raise RuntimeError(
+                "Multiple private DNS zones named "+dns_zone_name+
+                " were found; refusing ambiguous cleanup"
+            )
+        if len(zones) == 1:
+            zone_id = zones[0].id
+            if use_fallback_discovery:
+                for hostname in sorted(hostnames):
+                    domain = hostname+"."+dns_zone_name
+                    if domain.lower() not in terraform_slurm_domains:
+                        fallback_rrsets_by_key[(zone_id, domain.lower())] = (
+                            zone_id,
+                            domain,
+                            set(private_ips),
+                        )
+            if slurm_cleanup_enabled:
+                for private_ip in sorted(private_ips):
+                    slurm_domain = get_instance_pool_slurm_dns_domain(
+                        inventory_dict,
+                        private_ip,
+                        dns_zone_name,
+                    )
+                    if (
+                        slurm_domain is not None
+                        and slurm_domain.lower() not in terraform_slurm_domains
+                    ):
+                        rrset_key = (zone_id, slurm_domain.lower())
+                        if rrset_key in fallback_rrsets_by_key:
+                            fallback_rrsets_by_key[rrset_key][2].add(private_ip)
+                        else:
+                            fallback_rrsets_by_key[rrset_key] = (
+                                zone_id,
+                                slurm_domain,
+                                {private_ip},
+                            )
+    ownership_keys = {
+        (rrset["zone_id"], rrset["domain"].lower())
+        for rrset in (ownership["rrsets"] if ownership is not None else [])
+    }
+    fallback_rrsets = [
+        rrset for key, rrset in fallback_rrsets_by_key.items()
+        if key not in ownership_keys
+    ]
+
+    # Validate every journal, exact pool identity, and candidate RRset before
+    # the first DNS mutation.  A persisted ledger is authoritative; fallback
+    # discovery is only for older deployments that never wrote one.  Slurm
+    # aliases already present in Terraform state remain Terraform-owned; only
+    # state-external aliases created by later pool additions are included.
+    if ownership is not None:
+        for rrset in ownership["rrsets"]:
+            verify_private_dns_a_rrset_ownership(
+                rrset["zone_id"],
+                rrset["domain"],
+                rrset["private_ips"],
+            )
+    for zone_id, domain, expected_private_ips in fallback_rrsets:
+        verify_private_dns_a_rrset_ownership(
+            zone_id,
             domain,
-            private_ips,
+            expected_private_ips,
         )
+
+    if ownership is not None:
+        ownership = finish_pending_managed_pool_dns_ownership_transfer(
+            inventory_path,
+            ownership,
+            expected_cluster_name,
+            ownership_pool_id,
+        )
+        for rrset in ownership["rrsets"]:
+            if rrset["domain"].lower() in terraform_slurm_domains:
+                continue
+            delete_private_dns_a_rrset_if_owned(
+                rrset["zone_id"],
+                rrset["domain"],
+                rrset["private_ips"],
+            )
+    for zone_id, domain, expected_private_ips in fallback_rrsets:
+        delete_private_dns_a_rrset_if_owned(
+            zone_id,
+            domain,
+            expected_private_ips,
+        )
+    if ownership is not None:
+        write_instance_pool_name_dns_ownership(inventory_path, None)
 
 def refresh_instance_pool_hosts(inventory_path, max_wait_seconds=1800):
     configured_playbooks_directory = globals().get("playbooks_dir")
@@ -2989,6 +3939,7 @@ def synchronize_instance_pool_names(
     expected_cluster_name,
     observed_hostnames_by_instance_id=None,
     max_wait_seconds=60,
+    cluster_network_id=None,
 ):
     current_inventory = parse_inventory(inventory_path)
     if current_inventory is None:
@@ -3023,11 +3974,20 @@ def synchronize_instance_pool_names(
         raise RuntimeError(
             "The Instance Pool post-resize recovery marker belongs to another cluster or pool"
         )
-    instances, instances_by_id = get_complete_instance_pool_instances(
-        compartment_id,
-        instance_pool_id,
-        max_wait_seconds=max_wait_seconds,
-    )
+    if cluster_network_id is not None:
+        instances, instances_by_id = get_complete_cluster_network_instances(
+            compartment_id,
+            cluster_network_id,
+            instance_pool_id,
+            expected_cluster_name,
+            max_wait_seconds=max_wait_seconds,
+        )
+    else:
+        instances, instances_by_id = get_complete_instance_pool_instances(
+            compartment_id,
+            instance_pool_id,
+            max_wait_seconds=max_wait_seconds,
+        )
     inventory_hosts = get_instance_pool_inventory_hosts(current_inventory)
     if set(inventory_hosts) != set(instances_by_id):
         raise RuntimeError(
@@ -3052,6 +4012,21 @@ def synchronize_instance_pool_names(
         ):
             raise RuntimeError(
                 "The pending Instance Pool hostname sync plan belongs to another cluster or pool"
+            )
+        if cluster_network_id is not None and (
+            pending_plan.get("version") != 2
+            or pending_plan.get("deployment_type") != "CN"
+            or pending_plan.get("cluster_network_id") != cluster_network_id
+        ):
+            raise RuntimeError(
+                "The pending hostname sync plan belongs to another Cluster Network parent"
+            )
+        if cluster_network_id is None and (
+            pending_plan.get("version") == 2
+            and pending_plan.get("deployment_type") != "IP"
+        ):
+            raise RuntimeError(
+                "The pending hostname sync plan belongs to another deployment type"
             )
         if set(pending_plan["members"]) != set(instances_by_id):
             raise RuntimeError(
@@ -3162,7 +4137,7 @@ def synchronize_instance_pool_names(
         if pending_plan is not None:
             return
         pending_plan = {
-            "version": 1,
+            "version": 2 if cluster_network_id is not None else 1,
             "status": "pending",
             "cluster_name": expected_cluster_name,
             "instance_pool_id": instance_pool_id,
@@ -3176,6 +4151,11 @@ def synchronize_instance_pool_names(
                 for instance_id in desired_names_by_instance_id
             },
         }
+        if cluster_network_id is not None:
+            pending_plan.update({
+                "deployment_type": "CN",
+                "cluster_network_id": cluster_network_id,
+            })
         # The update helper calls this after it has validated the complete,
         # exact pool membership plus every instance and Primary VNIC, before
         # any possible OCI mutation.  A retry therefore never recollects facts
@@ -3194,6 +4174,7 @@ def synchronize_instance_pool_names(
             instance_id: instances_by_id[instance_id]["ip"]
             for instance_id in desired_names_by_instance_id
         },
+        cluster_network_id=cluster_network_id,
     )
     previous_names_for_dns = dict(previous_names)
     previous_names_for_dns.update({
@@ -3230,6 +4211,93 @@ def synchronize_instance_pool_names(
     for instance_id, desired_name in desired_names_by_instance_id.items():
         instances_by_id[instance_id]["display_name"] = desired_name
     return list(instances_by_id.values()), rewritten_inventory
+
+def synchronize_autoscaling_managed_pool_names(
+    compartment_id,
+    inventory_path,
+    expected_cluster_name,
+    expected_instance_pool_id=None,
+    expected_cluster_network_id=None,
+    observed_hostnames_by_instance_id=None,
+    max_wait_seconds=60,
+):
+    """Resolve Terraform's exact managed-pool identity, then synchronize it."""
+    direct_instance_pool_id = get_tracked_instance_pool_id(inventory_path)
+    tracked_cluster_network_id = get_tracked_cluster_network_id(inventory_path)
+    tracked_compute_cluster_resources = get_tracked_compute_cluster_resources(
+        inventory_path
+    )
+    tracked_compute_cluster_is_present = has_tracked_compute_cluster_resources(
+        tracked_compute_cluster_resources
+    )
+    if sum(
+        deployment_is_present
+        for deployment_is_present in [
+            direct_instance_pool_id is not None,
+            tracked_cluster_network_id is not None,
+            tracked_compute_cluster_is_present,
+        ]
+    ) > 1:
+        raise RuntimeError(
+            "Terraform state identifies multiple compute deployment types"
+        )
+    if tracked_compute_cluster_is_present:
+        raise RuntimeError(
+            "Terraform state identifies a Compute Cluster, not a managed pool"
+        )
+    if tracked_cluster_network_id is not None:
+        cluster_network, embedded_pool = (
+            get_tracked_cluster_network_for_hostname_sync(
+                inventory_path,
+                compartment_id,
+                expected_cluster_name,
+                # A detach work request can finish before the parent leaves
+                # SCALING.  Resolve the exact identity now; the complete CN
+                # snapshot below waits for RUNNING before any mutation.
+                require_running=False,
+            )
+        )
+        instance_pool_id = embedded_pool.id
+        if (
+            expected_cluster_network_id not in [None, cluster_network.id]
+            or expected_instance_pool_id not in [None, instance_pool_id]
+        ):
+            raise RuntimeError(
+                "The requested Cluster Network does not match Terraform state"
+            )
+        return synchronize_instance_pool_names(
+            compartment_id,
+            instance_pool_id,
+            inventory_path,
+            expected_cluster_name,
+            observed_hostnames_by_instance_id=observed_hostnames_by_instance_id,
+            max_wait_seconds=max_wait_seconds,
+            cluster_network_id=cluster_network.id,
+        )
+    if direct_instance_pool_id is not None:
+        instance_pool = get_tracked_instance_pool_for_hostname_sync(
+            inventory_path,
+            compartment_id,
+            expected_cluster_name,
+        )
+        if (
+            expected_cluster_network_id is not None
+            or expected_instance_pool_id not in [None, instance_pool.id]
+        ):
+            raise RuntimeError(
+                "The requested Instance Pool does not match Terraform state"
+            )
+        return synchronize_instance_pool_names(
+            compartment_id,
+            instance_pool.id,
+            inventory_path,
+            expected_cluster_name,
+            observed_hostnames_by_instance_id=observed_hostnames_by_instance_id,
+            max_wait_seconds=max_wait_seconds,
+        )
+    raise RuntimeError(
+        "Terraform state does not identify an Instance Pool or Cluster Network for hostname synchronization"
+    )
 
 def prepare_local_block_volume_inventory(inventory_path, max_wait_seconds=300):
     prepared_inventory = parse_inventory(inventory_path)
@@ -3504,16 +4572,17 @@ def add_reconfigure(comp_ocid,cn_ocid,inventory,CN,specific_hosts=None):
         if move_status != 0:
             print("Failed to install the updated inventory")
             return 1
-        if CN == "IP" and autoscaling:
+        if CN in ["IP", "CN"] and autoscaling:
             try:
-                synchronize_instance_pool_names(
+                synchronize_autoscaling_managed_pool_names(
                     comp_ocid,
-                    cn_ocid,
                     inventory,
                     cluster_name,
+                    expected_instance_pool_id=(cn_ocid if CN == "IP" else None),
+                    expected_cluster_network_id=(cn_ocid if CN == "CN" else None),
                 )
             except Exception as error:
-                print("Instance Pool OS hostname synchronization failed: "+str(error))
+                print("Managed pool OS hostname synchronization failed: "+str(error))
                 return 1
     else:
         print("The reconfiguration to add the node(s) had an error")
@@ -3566,16 +4635,17 @@ def reconfigure(comp_ocid,cn_ocid,inventory,CN, crucial=False):
         if move_status != 0:
             print("Failed to install the reconfigured inventory")
             return 1
-        if CN == "IP" and autoscaling:
+        if CN in ["IP", "CN"] and autoscaling:
             try:
-                synchronize_instance_pool_names(
+                synchronize_autoscaling_managed_pool_names(
                     comp_ocid,
-                    cn_ocid,
                     inventory,
                     cluster_name,
+                    expected_instance_pool_id=(cn_ocid if CN == "IP" else None),
+                    expected_cluster_network_id=(cn_ocid if CN == "CN" else None),
                 )
             except Exception as error:
-                print("Instance Pool OS hostname synchronization failed: "+str(error))
+                print("Managed pool OS hostname synchronization failed: "+str(error))
                 return 1
     else:
         print("The reconfiguration had an error")
@@ -3742,25 +4812,90 @@ def get_summary_for_operation(
     inventory_dict,
     mode,
     autoscaling,
+    monitoring_output=False,
 ):
-    is_instance_pool_hostname_sync = (
-        mode == "sync_instance_pool_names"
-        and autoscaling
-        and not parse_bool(
-            get_inventory_variable(
-                inventory_dict,
-                "cluster_network",
-                "true",
-            )
-        )
+    requires_exact_managed_pool = autoscaling and (
+        mode in [
+            "add",
+            "remove",
+            "remove_unreachable",
+            "reconfigure",
+            "sync_instance_pool_names",
+        ]
+        or (mode == "list" and monitoring_output)
     )
-    if is_instance_pool_hostname_sync:
-        instance_pool = get_tracked_instance_pool_for_hostname_sync(
-            inventory_path,
-            compartment_id,
-            cluster_name,
+    if autoscaling:
+        direct_instance_pool_id = get_tracked_instance_pool_id(inventory_path)
+        tracked_cluster_network_id = get_tracked_cluster_network_id(
+            inventory_path
         )
-        return instance_pool, instance_pool, "IP"
+        compute_cluster_resources = get_tracked_compute_cluster_resources(
+            inventory_path
+        )
+        tracked_compute_cluster_is_present = has_tracked_compute_cluster_resources(
+            compute_cluster_resources
+        )
+        if sum(
+            deployment_is_present
+            for deployment_is_present in [
+                direct_instance_pool_id is not None,
+                tracked_cluster_network_id is not None,
+                tracked_compute_cluster_is_present,
+            ]
+        ) > 1:
+            raise RuntimeError(
+                "Terraform state identifies multiple compute deployment types"
+            )
+        if tracked_cluster_network_id is not None:
+            cluster_network, embedded_pool = (
+                get_tracked_cluster_network_for_hostname_sync(
+                    inventory_path,
+                    compartment_id,
+                    cluster_name,
+                    require_running=requires_exact_managed_pool,
+                )
+            )
+            return cluster_network, embedded_pool, "CN"
+        if direct_instance_pool_id is not None:
+            instance_pool = get_tracked_instance_pool_for_hostname_sync(
+                inventory_path,
+                compartment_id,
+                cluster_name,
+            )
+            return instance_pool, instance_pool, "IP"
+        if requires_exact_managed_pool:
+            if (
+                compute_cluster_resources is not None
+                and compute_cluster_resources[0] is not None
+            ):
+                tracked_compute_cluster_id = compute_cluster_resources[0]
+                compute_cluster = computeClient.get_compute_cluster(
+                    tracked_compute_cluster_id,
+                    **get_oci_retry_kwargs(),
+                ).data
+                if (
+                    getattr(
+                        compute_cluster,
+                        "id",
+                        tracked_compute_cluster_id,
+                    ) != tracked_compute_cluster_id
+                    or getattr(compute_cluster, "compartment_id", None)
+                    != compartment_id
+                    or getattr(compute_cluster, "display_name", None)
+                    != cluster_name
+                ):
+                    raise RuntimeError(
+                        "The Terraform-tracked Compute Cluster identity does not match this cluster"
+                    )
+                return compute_cluster, None, "CC"
+            if tracked_compute_cluster_is_present:
+                raise RuntimeError(
+                    "Terraform state identifies Compute Cluster instances "
+                    "without an exact Compute Cluster identity"
+                )
+            raise RuntimeError(
+                "Terraform state does not identify an Autoscaling managed pool"
+            )
     return get_summary(compartment_id, cluster_name)
 
 def get_exact_instance_pool_size(
@@ -4792,7 +5927,7 @@ def resume_pending_instance_pool_node_removals(
     # termination.  cleanup_compute_cluster may legitimately see a pool that
     # Terraform has already deleted, but it must never accept a different live
     # pool merely because a journal names it.
-    tracked_pool_id = get_tracked_instance_pool_id(inventory_path)
+    tracked_pool_id = get_tracked_managed_instance_pool_id(inventory_path)
     if tracked_pool_id is not None and tracked_pool_id != instance_pool_id:
         raise RuntimeError("The pending removal does not match Terraform's Instance Pool")
     try:
@@ -4972,7 +6107,7 @@ def resume_pending_instance_pool_node_removals_for_cleanup(
             "Pending Instance Pool node removals reference multiple pools"
         )
     instance_pool_id = next(iter(instance_pool_ids))
-    tracked_pool_id = get_tracked_instance_pool_id(inventory_path)
+    tracked_pool_id = get_tracked_managed_instance_pool_id(inventory_path)
     if tracked_pool_id is not None and tracked_pool_id != instance_pool_id:
         raise RuntimeError(
             "Pending Instance Pool node removals do not match Terraform state"
@@ -4994,7 +6129,10 @@ def get_tracked_compute_cluster_resources(inventory_path):
     tracked_compute_cluster_ids = set()
     tracked_ids = set()
     for resource in state.get("resources", []):
-        if resource.get("mode") != "managed":
+        if (
+            resource.get("mode") != "managed"
+            or resource.get("module") not in [None, ""]
+        ):
             continue
         for resource_instance in resource.get("instances", []):
             resource_id = resource_instance.get("attributes", {}).get("id")
@@ -5289,7 +6427,9 @@ if args.mode == "cleanup_compute_cluster":
     cleanup_pending_node_removals = load_pending_instance_pool_node_removals(
         inventory
     )
-    cleanup_expected_instance_pool_id = get_tracked_instance_pool_id(inventory)
+    cleanup_expected_instance_pool_id = get_tracked_managed_instance_pool_id(
+        inventory
+    )
     if cleanup_expected_instance_pool_id is None and cleanup_pending_node_removals:
         cleanup_pending_pool_ids = {
             record["instance_pool_id"]
@@ -5308,15 +6448,20 @@ if args.mode == "cleanup_compute_cluster":
     cleanup_compute_cluster_resources = get_tracked_compute_cluster_resources(
         inventory
     )
-    cleanup_has_tracked_compute_cluster = (
-        cleanup_compute_cluster_resources is not None
-        and cleanup_compute_cluster_resources[0] is not None
+    cleanup_has_tracked_compute_cluster = has_tracked_compute_cluster_resources(
+        cleanup_compute_cluster_resources
     )
     if (
-        cleanup_pending_local_volumes
-        and not parse_bool(
-            get_inventory_variable(inventory_dict, "cluster_network", "false")
+        cleanup_has_tracked_compute_cluster
+        and cleanup_compute_cluster_resources[0] is None
+    ):
+        print(
+            "STDOUT: Terraform state contains Compute Cluster instances but "
+            "not their exact Compute Cluster identity; refusing cleanup"
         )
+        exit(1)
+    if (
+        cleanup_pending_local_volumes
         and not cleanup_has_tracked_compute_cluster
         and cleanup_expected_instance_pool_id is None
     ):
@@ -5412,9 +6557,39 @@ if args.mode == 'cleanup_compute_cluster':
         raise RuntimeError("Terraform state was not found; refusing to clean up Compute Cluster instances before destroy")
     tracked_compute_cluster_id, tracked_instance_ids = tracked_compute_cluster_resources
     if tracked_compute_cluster_id is None:
-        if not parse_bool(
-            get_inventory_variable(inventory_dict, "cluster_network", "false")
+        if tracked_instance_ids:
+            raise RuntimeError(
+                "Terraform state contains Compute Cluster instances without "
+                "an exact Compute Cluster identity; refusing managed pool cleanup"
+            )
+        managed_dns_marker_path = os.path.join(
+            os.path.dirname(os.path.abspath(inventory)),
+            MANAGED_POOL_DNS_OWNERSHIP_MARKER_FILENAME,
+        )
+        managed_dns_ownership_path = get_instance_pool_name_dns_ownership_path(
+            inventory
+        )
+        if os.path.lexists(managed_dns_marker_path) and (
+            os.path.islink(managed_dns_marker_path)
+            or not os.path.isfile(managed_dns_marker_path)
         ):
+            print(
+                "STDOUT: Failed to clean up managed pool hostname DNS records: "
+                "the DNS ownership marker is unsafe"
+            )
+            exit(1)
+        should_cleanup_managed_pool_dns = (
+            not parse_bool(
+                get_inventory_variable(
+                    inventory_dict,
+                    "cluster_network",
+                    "false",
+                )
+            )
+            or os.path.isfile(managed_dns_marker_path)
+            or os.path.isfile(managed_dns_ownership_path)
+        )
+        if should_cleanup_managed_pool_dns:
             try:
                 cleanup_instance_pool_name_dns_records(
                     comp_ocid,
@@ -5422,7 +6597,7 @@ if args.mode == 'cleanup_compute_cluster':
                     inventory_path=inventory,
                 )
             except Exception as error:
-                print("STDOUT: Failed to clean up Instance Pool hostname DNS records: "+str(error))
+                print("STDOUT: Failed to clean up managed pool hostname DNS records: "+str(error))
                 exit(1)
         print("STDOUT: Terraform state does not manage a Compute Cluster; no state-external instances need cleanup")
         exit(0)
@@ -5446,6 +6621,7 @@ try:
         inventory_dict,
         args.mode,
         autoscaling,
+        monitoring_output=args.monitoring_output,
     )
 except Exception as error:
     print("STDOUT: Failed to resolve cluster identity: "+str(error))
@@ -5467,7 +6643,7 @@ resuming_pending_node_removal_records = []
 # A failed synchronization may have already renamed some OCI resources or
 # rewritten Inventory.  Finish its persisted OCID/IP/hostname plan before any
 # later resize or Ansible operation can change pool membership or aliases.
-if CN == "IP" and autoscaling and args.mode in [
+if CN in ["IP", "CN"] and autoscaling and args.mode in [
     "add",
     "remove",
     "remove_unreachable",
@@ -5478,12 +6654,13 @@ if CN == "IP" and autoscaling and args.mode in [
         if pending_hostname_sync is not None:
             synchronize_instance_pool_names(
                 comp_ocid,
-                cn_ocid,
+                current_instance_pool_id,
                 inventory,
                 cluster_name,
+                cluster_network_id=(cn_ocid if CN == "CN" else None),
             )
             print(
-                "STDOUT: Completed the previously committed Instance Pool hostname "
+                "STDOUT: Completed the previously committed managed pool hostname "
                 "synchronization; run the requested resize again if it is still needed"
             )
             # The journal is written only after a prior resize/reconfigure has
@@ -5492,12 +6669,12 @@ if CN == "IP" and autoscaling and args.mode in [
             exit(0)
     except Exception as error:
         print(
-            "STDOUT: Failed to resume pending Instance Pool hostname synchronization: "+
+            "STDOUT: Failed to resume pending managed pool hostname synchronization: "+
             str(error)
         )
         exit(1)
 
-if CN == "IP" and autoscaling and args.mode in [
+if CN in ["IP", "CN"] and autoscaling and args.mode in [
     "add",
     "remove",
     "remove_unreachable",
@@ -5513,7 +6690,7 @@ if CN == "IP" and autoscaling and args.mode in [
             inventory,
             cluster_name,
             comp_ocid,
-            cn_ocid,
+            current_instance_pool_id,
             args.mode,
         )
     except Exception as error:
@@ -5551,14 +6728,15 @@ if CN == "IP" and autoscaling and args.mode in [
             )
 
 pending_post_resize_recovery = None
-if CN == "IP" and autoscaling:
+if CN in ["IP", "CN"] and autoscaling:
     try:
         pending_post_resize_recovery = load_instance_pool_post_resize_recovery(
             inventory
         )
         if pending_post_resize_recovery is not None and (
             pending_post_resize_recovery["cluster_name"] != cluster_name
-            or pending_post_resize_recovery["instance_pool_id"] != cn_ocid
+            or pending_post_resize_recovery["instance_pool_id"]
+            != current_instance_pool_id
         ):
             raise RuntimeError(
                 "The post-resize recovery marker belongs to another cluster or pool"
@@ -5596,20 +6774,21 @@ if args.mode in ["add", "remove", "remove_unreachable", "reconfigure"]:
         exit(1)
 
 if args.mode == 'sync_instance_pool_names':
-    if CN != "IP" or not autoscaling:
-        print("STDOUT: Name synchronization is only enabled for Autoscaling Instance Pool deployments; no changes made")
+    if CN not in ["IP", "CN"] or not autoscaling:
+        print("STDOUT: Name synchronization is only enabled for Autoscaling managed pool deployments; no changes made")
         exit(0)
     try:
-        synchronized_instances, _ = synchronize_instance_pool_names(
+        synchronized_instances, _ = synchronize_autoscaling_managed_pool_names(
             comp_ocid,
-            cn_ocid,
             inventory,
             cluster_name,
+            expected_instance_pool_id=current_instance_pool_id,
+            expected_cluster_network_id=(cn_ocid if CN == "CN" else None),
         )
     except Exception as error:
-        print("STDOUT: Failed to synchronize Instance Pool names: "+str(error))
+        print("STDOUT: Failed to synchronize managed pool names: "+str(error))
         exit(1)
-    print("STDOUT: Synchronized "+str(len(synchronized_instances))+" Instance Pool name(s)")
+    print("STDOUT: Synchronized "+str(len(synchronized_instances))+" managed pool name(s)")
     exit(0)
 
 if CN != "CC":
@@ -5621,7 +6800,7 @@ if CN != "CC":
         current_size = get_exact_instance_pool_size(
             ipa_ocid,
             comp_ocid,
-            expected_display_name=cluster_name if CN == "IP" else None,
+            expected_display_name=cluster_name,
         )
     else:
         current_size=ip_summary.size
@@ -5715,16 +6894,24 @@ if completed_pending_node_removals_to_report:
 
 if args.mode == 'list':
     if args.monitoring_output:
-        if CN != "IP" or not autoscaling:
-            print("STDOUT: Validated monitoring output is only available for Autoscaling Instance Pool deployments")
+        if CN not in ["IP", "CN"] or not autoscaling:
+            print("STDOUT: Validated monitoring output is only available for Autoscaling managed pool deployments")
             exit(1)
         try:
-            cn_instances, _ = get_complete_instance_pool_instances(
-                comp_ocid,
-                cn_ocid,
-            )
+            if CN == "CN":
+                cn_instances, _ = get_complete_cluster_network_instances(
+                    comp_ocid,
+                    cn_ocid,
+                    current_instance_pool_id,
+                    cluster_name,
+                )
+            else:
+                cn_instances, _ = get_complete_instance_pool_instances(
+                    comp_ocid,
+                    current_instance_pool_id,
+                )
         except Exception as error:
-            print("STDOUT: Failed to obtain a complete Instance Pool member list: "+str(error))
+            print("STDOUT: Failed to obtain a complete managed pool member list: "+str(error))
             exit(1)
         print("EXPECTED_SIZE "+str(len(cn_instances)))
     else:
@@ -5747,7 +6934,7 @@ else:
     only_inventory_instance=[]
     zone_id = None
     if dns_entries:
-        if CN == "IP" and autoscaling:
+        if CN in ["IP", "CN"] and autoscaling:
             zone_id = get_single_private_dns_zone_id(comp_ocid, zone_name)
         else:
             zones = dns_client.list_zones(
@@ -5826,7 +7013,7 @@ else:
     planned_instance_pool_removals = []
     if (
         hostnames_to_remove_len
-        and CN == "IP"
+        and CN in ["IP", "CN"]
         and autoscaling
     ):
         if resuming_pending_node_removals:
@@ -5859,12 +7046,12 @@ else:
             )
     pool_members_to_remove_len = (
         len(planned_instance_pool_removals)
-        if CN == "IP" and autoscaling
+        if CN in ["IP", "CN"] and autoscaling
         else hostnames_to_remove_len
     )
     if (
         hostnames_to_remove_len
-        and CN == "IP"
+        and CN in ["IP", "CN"]
         and autoscaling
         and not resuming_pending_node_removals
     ):
@@ -5902,15 +7089,18 @@ else:
                     print("STDOUT: Force deleting the nodes")
         terminated_instances=0
         completed_node_removal_ids=[]
-        cn_summary,ip_summary,CN = get_summary(comp_ocid,cluster_name)
-        if CN != "CC": 
-            current_size = ip_summary.size
+        if CN != "CC":
+            current_size = get_exact_instance_pool_size(
+                ipa_ocid,
+                comp_ocid,
+                expected_display_name=cluster_name,
+            )
         removal_targets = (
             [
                 (record["instance_display_name"], record)
                 for record in planned_instance_pool_removals
             ]
-            if CN == "IP" and autoscaling
+            if CN in ["IP", "CN"] and autoscaling
             else [(instance_name, None) for instance_name in hostnames_to_remove]
         )
         for instanceName, frozen_node_removal in removal_targets:
@@ -5993,17 +7183,17 @@ else:
             except Exception as error:
                 print("Failed to remove instance "+instanceName+": "+str(error))
                 raise
-        cn_summary,ip_summary,CN = get_summary(comp_ocid,cluster_name)
         if CN == "CC":
             cn_instances = get_instances(comp_ocid,cn_ocid,CN)
             newsize=len(cn_instances)
         else:
-            current_cn_ocid = cn_summary.id
-            if CN == "CN":
-                current_ipa_ocid = cn_summary.instance_pools[0].id
-            else:
-                current_ipa_ocid = current_cn_ocid
-            newsize=ip_summary.size
+            current_cn_ocid = cn_ocid
+            current_ipa_ocid = ipa_ocid
+            newsize = get_exact_instance_pool_size(
+                current_ipa_ocid,
+                comp_ocid,
+                expected_display_name=cluster_name,
+            )
             ready_removed_nodes = retry_pending_local_block_volume_deletions(
                 inventory,
                 cluster_name,
@@ -6046,21 +7236,24 @@ else:
                     inventory,
                     completed_instance_id,
                 )
-            if CN == "IP" and autoscaling and not no_reconfigure:
+            if CN in ["IP", "CN"] and autoscaling and not no_reconfigure:
                 try:
-                    synchronize_instance_pool_names(
+                    synchronize_autoscaling_managed_pool_names(
                         comp_ocid,
-                        current_ipa_ocid,
                         inventory,
                         cluster_name,
+                        expected_instance_pool_id=current_ipa_ocid,
+                        expected_cluster_network_id=(
+                            current_cn_ocid if CN == "CN" else None
+                        ),
                     )
                 except Exception as name_sync_error:
                     raise RuntimeError(
-                        "The Instance Pool reached size "+str(newsize)+
+                        "The managed pool reached size "+str(newsize)+
                         " but name synchronization failed. Run sync_instance_pool_names: "+
                         str(name_sync_error)
                     )
-            elif CN == "IP" and autoscaling:
+            elif CN in ["IP", "CN"] and autoscaling:
                 clear_instance_pool_post_resize_recovery(inventory)
         print("STDOUT: Resized to "+str(newsize)+" instances")
 #        if error_code != 0 and force:
@@ -6070,14 +7263,14 @@ else:
     if args.mode == 'add':
         cn_instances = get_instances(comp_ocid,cn_ocid,CN)
         previous_instance_ids = {instance['ocid'] for instance in cn_instances}
-        if CN == "IP" and autoscaling:
+        if CN in ["IP", "CN"] and autoscaling:
             current_inventory = parse_inventory(inventory)
             inventory_instance_ids = get_compute_inventory_instance_ids(
                 current_inventory
             )
             if inventory_instance_ids != previous_instance_ids:
                 raise RuntimeError(
-                    "The Autoscaling Instance Pool and compute inventory do not match. "
+                    "The Autoscaling managed pool and compute inventory do not match. "
                     "Run reconfigure before adding more instances"
                 )
         launched_instance_names=[]
@@ -6114,7 +7307,7 @@ else:
             size = current_size - pool_members_to_remove_len + args.number
             expected_size=size
             pool_rollback_size=current_size-pool_members_to_remove_len
-            if CN == "IP" and autoscaling:
+            if CN in ["IP", "CN"] and autoscaling:
                 # Establish the recovery boundary before changing pool size.
                 # A process interruption on either side of the OCI update can
                 # therefore be recovered without applying the add count twice.
@@ -6139,9 +7332,6 @@ else:
                 rollback_instance_pool_size(ipa_ocid,pool_rollback_size)
                 raise
         try:
-            cn_summary,ip_summary,CN = get_summary(comp_ocid,cluster_name)
-            if cn_summary is None:
-                raise RuntimeError("Cluster "+cluster_name+" was not found after adding instances")
             new_cn_instances = get_instances(comp_ocid,cn_ocid,CN)
             newsize=len(new_cn_instances)
             if newsize != expected_size:
@@ -6163,10 +7353,14 @@ else:
                 instanceName=new_instance['display_name']
                 ip = ipaddress.ip_address(new_instance['ip'])
                 index = list(private_subnet_cidr.hosts()).index(ip)+2
-                if slurm_enabled or CN != "IP" or not autoscaling:
+                if (
+                    slurm_enabled
+                    or CN not in ["IP", "CN"]
+                    or not autoscaling
+                ):
                     slurm_name=queue+"-"+instance_type+"-"+str(index)+"."+zone_name
                     get_rr_set_response = dns_client.update_rr_set(zone_name_or_id=zone_id,domain=slurm_name,rtype="A",scope="PRIVATE",update_rr_set_details=oci.dns.models.UpdateRRSetDetails(items=[oci.dns.models.RecordDetails(domain=slurm_name,rdata=new_instance['ip'],rtype="A",ttl=3600,)]))
-                if CN != "IP" or not autoscaling:
+                if CN not in ["IP", "CN"] or not autoscaling:
                     get_rr_set_response = dns_client.update_rr_set(zone_name_or_id=zone_id,domain=instanceName+"."+zone_name,rtype="A",scope="PRIVATE",update_rr_set_details=oci.dns.models.UpdateRRSetDetails(items=[oci.dns.models.RecordDetails(domain=instanceName+"."+zone_name,rdata=new_instance['ip'],rtype="A",ttl=3600)]))
         # The pool size is durable before Ansible and post-Ansible name
         # synchronization.  Persist it even when --no_reconfigure was requested.
@@ -6175,5 +7369,5 @@ else:
             reconfigure_status = add_reconfigure(comp_ocid,cn_ocid,inventory,CN)
             if reconfigure_status != 0:
                 exit(reconfigure_status)
-        elif CN == "IP" and autoscaling:
+        elif CN in ["IP", "CN"] and autoscaling:
             clear_instance_pool_post_resize_recovery(inventory)

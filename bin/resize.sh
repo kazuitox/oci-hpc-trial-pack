@@ -9,18 +9,18 @@ autoscaling_folder=$folder/../autoscaling
 monitoring_folder=$folder/../monitoring
 logs_folder=$folder/../logs
 
-is_autoscaling_instance_pool_deployment()
+is_autoscaling_managed_pool_deployment()
 {
   local cluster_directory=$autoscaling_folder/clusters/$1
   local variables_file=$cluster_directory/variables.tf
   local inventory_file=$cluster_directory/inventory
   [ -f "$variables_file" ] \
     && [ -f "$inventory_file" ] \
-    && grep -Eq '^[[:space:]]*cluster_network[[:space:]]*=[[:space:]]*false[[:space:]]*$' "$inventory_file" \
+    && grep -Eq '^[[:space:]]*cluster_network[[:space:]]*=[[:space:]]*(true|false)[[:space:]]*$' "$inventory_file" \
     && ! grep -Eq '^variable "compute_cluster".*default[[:space:]]*=[[:space:]]*true' "$variables_file"
 }
 
-reconcile_instance_pool_monitoring()
+reconcile_managed_pool_monitoring()
 {
   local target_cluster_name=$1
   local cluster_directory=$autoscaling_folder/clusters/$target_cluster_name
@@ -56,13 +56,13 @@ reconcile_instance_pool_monitoring()
   then
     return 0
   fi
-  if ! is_autoscaling_instance_pool_deployment "$target_cluster_name"
+  if ! is_autoscaling_managed_pool_deployment "$target_cluster_name"
   then
     return 0
   fi
   if [ ! -f "$inventory_file" ] || [ ! -f "$cluster_id_file" ]
   then
-    echo "Cannot reconcile monitoring: Instance Pool inventory or cluster ID is missing" >&2
+    echo "Cannot reconcile monitoring: managed pool inventory or cluster ID is missing" >&2
     return 1
   fi
 
@@ -92,20 +92,20 @@ reconcile_instance_pool_monitoring()
   if ! python3 "$folder/resize.py" --cluster_name "$target_cluster_name" --inventory "$inventory_file" list --monitoring-output > "$monitoring_output" 2>> "$logs_folder/resize_${cluster_id}.log"
   then
     rm -f "$monitoring_output"
-    echo "Cannot obtain a complete Instance Pool member list; monitoring was not changed" >&2
+    echo "Cannot obtain a complete managed pool member list; monitoring was not changed" >&2
     return 1
   fi
   mapfile -t monitoring_lines < "$monitoring_output"
   rm -f "$monitoring_output"
   if [ ${#monitoring_lines[@]} -eq 0 ]
   then
-    echo "Validated Instance Pool member list is empty" >&2
+    echo "Validated managed pool member list is empty" >&2
     return 1
   fi
   read -r header_marker expected_size header_extra <<< "${monitoring_lines[0]}"
   if [ "$header_marker" != "EXPECTED_SIZE" ] || ! [[ "$expected_size" =~ ^[0-9]+$ ]] || [ -n "$header_extra" ]
   then
-    echo "Validated Instance Pool member list has an invalid header" >&2
+    echo "Validated managed pool member list has an invalid header" >&2
     return 1
   fi
 
@@ -122,13 +122,13 @@ reconcile_instance_pool_monitoring()
       || ! [[ "$ocid" =~ ^ocid1\.instance\.[A-Za-z0-9.-]+$ ]] \
       || [ -n "$extra" ]
     then
-      echo "Validated Instance Pool member list contains a malformed row" >&2
+      echo "Validated managed pool member list contains a malformed row" >&2
       return 1
     fi
     normalized_hostname=${hostname,,}
     if [ -n "${seen_hostnames[$normalized_hostname]+present}" ] || [ -n "${seen_ocids[$ocid]+present}" ]
     then
-      echo "Validated Instance Pool member list contains duplicate names or OCIDs" >&2
+      echo "Validated managed pool member list contains duplicate names or OCIDs" >&2
       return 1
     fi
     seen_hostnames[$normalized_hostname]=1
@@ -138,7 +138,7 @@ reconcile_instance_pool_monitoring()
   done
   if [ "$active_count" -ne "$expected_size" ]
   then
-    echo "Validated Instance Pool member list does not match its expected size; monitoring was not changed" >&2
+    echo "Validated managed pool member list does not match its expected size; monitoring was not changed" >&2
     return 1
   fi
 
@@ -289,10 +289,10 @@ then
     log=$logs_folder/resize_${cluster_id}.log
     if [ $reconcile_monitoring_only -eq 1 ]
     then
-      reconcile_instance_pool_monitoring "$cluster_name"
+      reconcile_managed_pool_monitoring "$cluster_name"
       exit $?
     fi
-    if [ "$resize_type" == "reconcile" ] && ! is_autoscaling_instance_pool_deployment "$cluster_name"
+    if [ "$resize_type" == "reconcile" ] && ! is_autoscaling_managed_pool_deployment "$cluster_name"
     then
       python3 $folder/resize.py ${@} &
       exit 0
@@ -340,9 +340,9 @@ then
     echo "Successfully Resized cluster $cluster_name in $runtime seconds"
     if [ -f $monitoring_folder/activated ]
     then
-      if [ $permanent -eq 0 ] && is_autoscaling_instance_pool_deployment "$cluster_name"
+      if [ $permanent -eq 0 ] && is_autoscaling_managed_pool_deployment "$cluster_name"
       then
-        if ! reconcile_instance_pool_monitoring "$cluster_name"
+        if ! reconcile_managed_pool_monitoring "$cluster_name"
         then
           echo "The cluster resize succeeded, but monitoring reconciliation failed. Retry only: $folder/resize.sh --cluster_name $cluster_name --reconcile-monitoring"
           mysql -u "$ENV_MYSQL_USER" -p"$ENV_MYSQL_PASS" -e "use $ENV_MYSQL_DATABASE_NAME; UPDATE cluster_log.clusters SET state='running' WHERE id='$cluster_id'" >> "$log" 2>&1
@@ -395,9 +395,9 @@ then
     echo "Could not resize cluster $cluster_name in 5 tries (Time: $runtime seconds)"
     if [ -f $monitoring_folder/activated ]
     then
-      if [ $permanent -eq 0 ] && is_autoscaling_instance_pool_deployment "$cluster_name"
+      if [ $permanent -eq 0 ] && is_autoscaling_managed_pool_deployment "$cluster_name"
       then
-        reconcile_instance_pool_monitoring "$cluster_name" || echo "Monitoring reconciliation also failed" >> "$log"
+        reconcile_managed_pool_monitoring "$cluster_name" || echo "Monitoring reconciliation also failed" >> "$log"
       fi
       mysql -u $ENV_MYSQL_USER -p$ENV_MYSQL_PASS -e "use $ENV_MYSQL_DATABASE_NAME; INSERT INTO cluster_log.errors_timeserie (cluster_id,state,error_log,error_type,created_on_m) VALUES ('$cluster_id','resize','$logs_folder/resize_${cluster_id}.log','`tail $log | grep Error`','$end_timestamp');" >> $log 2>&1
       mysql -u $ENV_MYSQL_USER -p$ENV_MYSQL_PASS -e "use $ENV_MYSQL_DATABASE_NAME; UPDATE cluster_log.clusters SET started_resizing=NULL,state='running' WHERE id='$cluster_id'" >> $log 2>&1
