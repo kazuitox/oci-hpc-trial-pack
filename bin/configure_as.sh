@@ -14,23 +14,23 @@ playbooks_path=$folder/../playbooks/
 inventory_path=$folder/../autoscaling/clusters/$1
 variables_path=$inventory_path/variables.tf
 
-is_autoscaling_managed_pool_deployment()
+is_autoscaling_compute_deployment()
 {
   [ -f "$inventory_path/inventory" ] \
     && grep -Eq '^[[:space:]]*cluster_network[[:space:]]*=[[:space:]]*(true|false)[[:space:]]*$' "$inventory_path/inventory" \
-    && ! grep -Eq '^variable "compute_cluster".*default[[:space:]]*=[[:space:]]*true' "$variables_path"
+    && [ -f "$variables_path" ]
 }
 
-synchronize_managed_pool_names_and_monitoring()
+synchronize_compute_names_and_monitoring()
 {
   if ! python3 "$folder/resize.py" --cluster_name "$1" --inventory "$inventory_path/inventory" sync_instance_pool_names
   then
-    echo "Failed to synchronize managed pool names from final OS hostnames for $1" >&2
+    echo "Failed to synchronize compute names from final OS hostnames for $1" >&2
     return 1
   fi
   if ! bash "$folder/resize.sh" --cluster_name "$1" --reconcile-monitoring
   then
-    echo "Failed to reconcile managed pool monitoring names for $1" >&2
+    echo "Failed to reconcile compute monitoring names for $1" >&2
     return 1
   fi
 }
@@ -39,10 +39,10 @@ synchronize_managed_pool_names_and_monitoring()
 # about to begin.  On a Terraform/configure retry, finish that immutable plan
 # before any playbook can change the final OS hostname it records.
 if [ -f "$variables_path" ] \
-  && is_autoscaling_managed_pool_deployment \
+  && is_autoscaling_compute_deployment \
   && [ -f "$inventory_path/.instance-pool-hostname-sync.json" ]
 then
-  synchronize_managed_pool_names_and_monitoring "$1"
+  synchronize_compute_names_and_monitoring "$1"
   exit $?
 fi
 
@@ -73,9 +73,9 @@ if [[ $execution -eq 1 ]] ; then
     echo "Failed to configure autoscaling nodes for $1" >&2
     exit 1
   fi
-  if [ -f "$variables_path" ] && is_autoscaling_managed_pool_deployment
+  if [ -f "$variables_path" ] && is_autoscaling_compute_deployment
   then
-    if ! synchronize_managed_pool_names_and_monitoring "$1"
+    if ! synchronize_compute_names_and_monitoring "$1"
     then
       exit 1
     fi

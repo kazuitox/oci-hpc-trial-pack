@@ -23,6 +23,7 @@
 
 ### Fixed
 
+- Autoscaling の Compute Cluster でも、Ansible 適用後の実OSホスト名へOCIインスタンス名とPrimary VNIC表示名を同期し、増減・DNS・監視情報・削除処理で同期後の名前を扱えるようにしました。
 - OpenComposerをデプロイ時にPassengerアプリとして事前登録し、Open OnDemand統合画面がJavaScriptエラー時にも白画面にならないようにしました。
 
 ## [v1.0.0] - 2026-08-23

@@ -21,14 +21,13 @@ autoscaling_folder=$folder/../autoscaling
 monitoring_folder=$folder/../monitoring
 logs_folder=$folder/../logs
 
-is_autoscaling_managed_pool_deployment()
+is_autoscaling_compute_deployment()
 {
   local variables_file=$autoscaling_folder/clusters/$1/variables.tf
   local inventory_file=$autoscaling_folder/clusters/$1/inventory
   [ -f "$variables_file" ] \
     && [ -f "$inventory_file" ] \
-    && grep -Eq '^[[:space:]]*cluster_network[[:space:]]*=[[:space:]]*(true|false)[[:space:]]*$' "$inventory_file" \
-    && ! grep -Eq '^variable "compute_cluster".*default[[:space:]]*=[[:space:]]*true' "$variables_file"
+    && grep -Eq '^[[:space:]]*cluster_network[[:space:]]*=[[:space:]]*(true|false)[[:space:]]*$' "$inventory_file"
 }
 
 cd $autoscaling_folder/clusters/$1
@@ -77,14 +76,14 @@ else
     status_compute_cleanup=$?
     if [ $status_compute_cleanup -ne 0 ]
     then
-      echo "Compute Cluster instance cleanup failed; Terraform destroy will still be attempted" >> $logs_folder/delete_${cluster_id}.log 2>&1
+      echo "Compute name or resource cleanup failed" >> $logs_folder/delete_${cluster_id}.log 2>&1
     fi
   else
     status_compute_cleanup=0
   fi
-  if [ $status_compute_cleanup -ne 0 ] && is_autoscaling_managed_pool_deployment "$1"
+  if [ $status_compute_cleanup -ne 0 ] && is_autoscaling_compute_deployment "$1"
   then
-    echo "Managed pool DNS cleanup failed; Terraform destroy was not started" >> $logs_folder/delete_${cluster_id}.log 2>&1
+    echo "Compute name and DNS cleanup failed; Terraform destroy was not started" >> $logs_folder/delete_${cluster_id}.log 2>&1
     rm -f currently_destroying
     if [ -f $monitoring_folder/activated ]
     then
@@ -147,7 +146,7 @@ else
   fi
   if [ $status_compute_cleanup -ne 0 ]
   then
-    echo "Compute Cluster instance cleanup failed before Terraform destroy" >> $logs_folder/delete_${cluster_id}.log 2>&1
+    echo "Compute name or resource cleanup failed before Terraform destroy" >> $logs_folder/delete_${cluster_id}.log 2>&1
   fi
   if [ $status_terraform_deletion -eq 0 ] && [ $status_compute_cleanup -eq 0 ]
   then
@@ -170,7 +169,7 @@ else
     rm -rf $autoscaling_folder/clusters/$1 | tee -a $logs_folder/delete_${cluster_id}.log 2>&1
     exit 0
   else
-    echo "Could not fully delete cluster $1 (Terraform status: $status_terraform_deletion, Compute Cluster cleanup status: $status_compute_cleanup, Time: $runtime seconds)"
+    echo "Could not fully delete cluster $1 (Terraform status: $status_terraform_deletion, compute cleanup status: $status_compute_cleanup, Time: $runtime seconds)"
     rm currently_destroying
     if [ -f $monitoring_folder/activated ]
     then

@@ -167,10 +167,10 @@ resource "oci_core_subnet" "private-subnet" {
 
 
 resource "oci_dns_rrset" "rrset-cluster-network-OCI" {
-  # Managed pool OCI-name records follow the final post-Ansible OS hostname
-  # and are therefore owned by resize.py. Compute Cluster instances keep their
-  # Terraform-owned records because they are not part of managed-pool syncing.
-  for_each        = var.dns_entries && var.compute_cluster ? toset([for v in range(var.node_count) : tostring(v)]) : []
+  # Final OCI display names come from post-Ansible OS hostnames.  resize.py owns
+  # these records for every Autoscaling compute deployment after that value is
+  # known; keeping this address gated also avoids stale Compute Cluster names.
+  for_each        = toset([])
   zone_name_or_id = data.oci_dns_zones.dns_zones.zones[0].id
   domain          = "${local.cluster_instances_names[tonumber(each.key)]}.${var.zone_name}"
   rtype           = "A"

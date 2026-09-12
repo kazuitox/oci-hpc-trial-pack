@@ -1505,7 +1505,11 @@ class InstancePoolDnsOwnershipMigrationTests(unittest.TestCase):
             ](inventory_path)
 
         self.assertTrue(changed)
-        self.assertIn("var.dns_entries && var.compute_cluster", migrated)
+        self.assertRegex(
+            migrated,
+            r"(?m)^\s*for_each\s*=\s*toset\(\[\]\)\s*$",
+        )
+        self.assertNotIn("var.dns_entries && var.compute_cluster", migrated)
         self.assertEqual(calls[1][:3], ["terraform", "state", "rm"])
         self.assertEqual(
             ownership["rrsets"][0]["domain"],
@@ -1544,7 +1548,11 @@ class InstancePoolDnsOwnershipMigrationTests(unittest.TestCase):
             )
             self.assertTrue(os.path.isfile(version_two_marker))
         self.assertTrue(changed)
-        self.assertIn("var.dns_entries && var.compute_cluster", migrated)
+        self.assertRegex(
+            migrated,
+            r"(?m)^\s*for_each\s*=\s*toset\(\[\]\)\s*$",
+        )
+        self.assertNotIn("var.dns_entries && var.compute_cluster", migrated)
 
 
 class InstancePoolSynchronizationTests(unittest.TestCase):
@@ -1658,7 +1666,10 @@ class InstancePoolSynchronizationTests(unittest.TestCase):
         update_names = self.namespace["update_instance_pool_display_names"] = mock.Mock()
         base = observed_names()
         bad_cases = (
-            ({"ocid1.instance.one": base["ocid1.instance.one"]}, r"OCID|[Ii]nstance"),
+            (
+                {"ocid1.instance.one": base["ocid1.instance.one"]},
+                r"membership|OCID|[Ii]nstance",
+            ),
             (
                 {
                     **base,
@@ -2894,7 +2905,7 @@ class InstancePoolNameWiringTests(unittest.TestCase):
         cls.resize_shell = read_repository_file("bin", "resize.sh")
         cls.resize = read_repository_file("bin", "resize.py")
 
-    def test_production_hostname_sync_calls_use_exact_cluster_identity_arguments(self):
+    def test_production_hostname_sync_calls_use_exact_deployment_identity_arguments(self):
         source = read_repository_file("bin", "resize.py")
         calls = [
             node
@@ -2902,20 +2913,40 @@ class InstancePoolNameWiringTests(unittest.TestCase):
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
-                and node.func.id == "synchronize_instance_pool_names"
+                and node.func.id == "synchronize_autoscaling_compute_names"
             )
         ]
 
         self.assertGreaterEqual(len(calls), 1)
         for call in calls:
-            self.assertEqual(len(call.args), 4)
-            first, second, third, fourth = call.args
+            self.assertEqual(len(call.args), 3)
+            first, second, third = call.args
             self.assertIn(first.id, ["comp_ocid", "compartment_id"])
-            self.assertIn(third.id, ["inventory", "inventory_path"])
-            self.assertIn(fourth.id, ["cluster_name", "expected_cluster_name"])
+            self.assertIn(second.id, ["inventory", "inventory_path"])
+            self.assertIn(third.id, ["cluster_name", "expected_cluster_name"])
+            identity_arguments = {
+                keyword.arg: ast.unparse(keyword.value)
+                for keyword in call.keywords
+            }
+            self.assertEqual(
+                set(identity_arguments),
+                {
+                    "expected_instance_pool_id",
+                    "expected_cluster_network_id",
+                    "expected_compute_cluster_id",
+                },
+            )
             self.assertIn(
-                getattr(second, "id", getattr(second, "attr", None)),
-                ["current_instance_pool_id", "instance_pool_id", "id"],
+                identity_arguments["expected_instance_pool_id"],
+                ["current_instance_pool_id", "cn_ocid if CN == 'IP' else None"],
+            )
+            self.assertEqual(
+                identity_arguments["expected_cluster_network_id"],
+                "cn_ocid if CN == 'CN' else None",
+            )
+            self.assertEqual(
+                identity_arguments["expected_compute_cluster_id"],
+                "cn_ocid if CN == 'CC' else None",
             )
 
     def test_terraform_does_not_predict_final_os_hostname(self):
@@ -2931,10 +2962,10 @@ class InstancePoolNameWiringTests(unittest.TestCase):
             "ansible-playbook $playbooks_path/new_nodes.yml"
         )
         sync = self.configure_autoscaling.index(
-            "synchronize_managed_pool_names_and_monitoring", playbook
+            "synchronize_compute_names_and_monitoring", playbook
         )
         sync_helper = self.configure_autoscaling.split(
-            "synchronize_managed_pool_names_and_monitoring()", 1
+            "synchronize_compute_names_and_monitoring()", 1
         )[1].split("\n}\n", 1)[0]
         self.assertLess(prepare, playbook)
         self.assertLess(playbook, sync)
@@ -2943,19 +2974,20 @@ class InstancePoolNameWiringTests(unittest.TestCase):
             sync_helper.index("--reconcile-monitoring"),
         )
 
-    def test_initial_sync_is_gated_to_managed_pool_before_oci_lookup(self):
+    def test_initial_sync_is_gated_to_autoscaling_compute_before_oci_lookup(self):
         sync = self.configure_autoscaling.index("sync_instance_pool_names")
         gating = self.configure_autoscaling[:sync]
         self.assertIn("cluster_network", gating)
-        self.assertIn('variable "compute_cluster"', gating)
-        self.assertIn("is_autoscaling_managed_pool_deployment", gating)
+        self.assertIn("variables_path=$inventory_path/variables.tf", gating)
+        self.assertIn("is_autoscaling_compute_deployment", gating)
+        self.assertNotIn("is_autoscaling_managed_pool_deployment", gating)
 
     def test_initial_retry_resumes_pending_plan_before_ansible(self):
         pending = self.configure_autoscaling.index(
             ".instance-pool-hostname-sync.json"
         )
         resume = self.configure_autoscaling.index(
-            "synchronize_managed_pool_names_and_monitoring", pending
+            "synchronize_compute_names_and_monitoring", pending
         )
         prepare = self.configure_autoscaling.index("prepare_local_block_volume")
         playbook = self.configure_autoscaling.index(
@@ -2978,16 +3010,17 @@ class InstancePoolNameWiringTests(unittest.TestCase):
             configure_resource,
         )
 
-    def test_instance_pool_canonical_dns_is_not_dual_owned_by_terraform(self):
+    def test_autoscaling_canonical_dns_is_not_dual_owned_by_terraform(self):
         oci_rrset = self.network.split(
             'resource "oci_dns_rrset" "rrset-cluster-network-OCI"', 1
         )[1].split(
             'resource "oci_dns_rrset" "rrset-cluster-network-SLURM"', 1
         )[0]
-        self.assertIn(
-            "var.dns_entries && var.compute_cluster",
+        self.assertRegex(
             oci_rrset,
+            r"(?m)^\s*for_each\s*=\s*toset\(\[\]\)\s*$",
         )
+        self.assertNotIn("var.compute_cluster", oci_rrset)
 
     def test_runtime_sync_uses_post_ansible_facts_and_not_ip_arithmetic(self):
         sync_body = self.resize.split("def synchronize_instance_pool_names", 1)[1].split(
@@ -3002,19 +3035,24 @@ class InstancePoolNameWiringTests(unittest.TestCase):
         add = self.resize.split("def add_reconfigure", 1)[1].split("def reconfigure", 1)[0]
         reconfigure = self.resize.split("def reconfigure", 1)[1].split("def getreachable", 1)[0]
         for body in (add, reconfigure):
-            self.assertIn("synchronize_autoscaling_managed_pool_names", body)
-            self.assertLess(body.index("update_cluster("), body.index("synchronize_autoscaling_managed_pool_names"))
+            self.assertIn("synchronize_autoscaling_compute_names", body)
+            self.assertLess(body.index("update_cluster("), body.index("synchronize_autoscaling_compute_names"))
             self.assertRegex(
                 body,
-                r"(?s)if update_flag\s*==\s*0:.*?synchronize_autoscaling_managed_pool_names",
+                r"(?s)if update_flag\s*==\s*0:.*?synchronize_autoscaling_compute_names",
             )
 
-    def test_cli_is_gated_to_autoscaling_managed_pools_only(self):
+    def test_cli_is_gated_to_autoscaling_compute_deployments(self):
         cli = self.resize.split("if args.mode == 'sync_instance_pool_names':", 1)[1].split(
             "if CN != \"CC\"", 1
         )[0]
-        self.assertIn('if CN not in ["IP", "CN"] or not autoscaling:', cli)
-        self.assertIn("synchronize_autoscaling_managed_pool_names(", cli)
+        self.assertIn("if not autoscaling:", cli)
+        self.assertNotIn('CN not in ["IP", "CN"]', cli)
+        self.assertIn("synchronize_autoscaling_compute_names(", cli)
+        self.assertIn(
+            'expected_compute_cluster_id=(cn_ocid if CN == "CC" else None)',
+            cli,
+        )
 
     def test_name_sync_updates_primary_vnic_display_name_only(self):
         update_function = next(
@@ -3070,9 +3108,9 @@ class InstancePoolNameWiringTests(unittest.TestCase):
         )
         self.assertIn("{{ item }}.local.vcn {{ item }}", refresh_template)
 
-    def test_managed_pool_dns_cleanup_blocks_terraform_destroy_on_failure(self):
+    def test_compute_dns_cleanup_blocks_terraform_destroy_on_failure(self):
         cleanup_guard = self.delete_cluster.index(
-            "Managed pool DNS cleanup failed; Terraform destroy was not started"
+            "Compute name and DNS cleanup failed; Terraform destroy was not started"
         )
         terraform_destroy = self.delete_cluster.index(
             "terraform destroy -auto-approve -parallelism 1"
@@ -3081,7 +3119,7 @@ class InstancePoolNameWiringTests(unittest.TestCase):
 
     def test_monitoring_rows_are_reconciled_by_ocid(self):
         function = self.resize_shell.split(
-            "reconcile_managed_pool_monitoring()", 1
+            "reconcile_compute_monitoring()", 1
         )[1].split("\n}\n", 1)[0]
         self.assertIn("list --monitoring-output", function)
         self.assertIn("EXPECTED_SIZE", function)
@@ -3091,7 +3129,7 @@ class InstancePoolNameWiringTests(unittest.TestCase):
 
     def test_monitoring_checks_existing_ocid_before_claiming_placeholder(self):
         function = self.resize_shell.split(
-            "reconcile_managed_pool_monitoring()", 1
+            "reconcile_compute_monitoring()", 1
         )[1].split("\n}\n", 1)[0]
         guard = "SET @oci_hpc_node_exists = (SELECT COUNT(*) FROM cluster_log.nodes WHERE node_OCID='${ocid}');"
         claim = (
@@ -3117,7 +3155,7 @@ class InstancePoolNameWiringTests(unittest.TestCase):
 
     def test_monitoring_releases_names_before_atomic_reassignment(self):
         function = self.resize_shell.split(
-            "reconcile_managed_pool_monitoring()", 1
+            "reconcile_compute_monitoring()", 1
         )[1].split("\n}\n", 1)[0]
         release = 'UPDATE cluster_log.nodes SET hostname=NULL WHERE node_OCID='
         assign = "UPDATE cluster_log.nodes SET cluster_id='$cluster_id',hostname='${hostname}'"
@@ -3130,7 +3168,7 @@ class InstancePoolNameWiringTests(unittest.TestCase):
             "if [ $status -eq 0 ]", 1
         )[1].split("else\n    echo \"Could not resize cluster", 1)[0]
         monitoring_failure = success_branch.split(
-            'if ! reconcile_managed_pool_monitoring "$cluster_name"', 1
+            'if ! reconcile_compute_monitoring "$cluster_name"', 1
         )[1].split("fi", 1)[0]
         self.assertNotIn("status=1", monitoring_failure)
         self.assertIn("--reconcile-monitoring", monitoring_failure)
@@ -3164,9 +3202,9 @@ class InstancePoolNameWiringTests(unittest.TestCase):
         for mode in ("add", "remove", "remove_unreachable", "reconfigure"):
             self.assertIn('"'+mode+'"', resume_block)
         self.assertIn("load_instance_pool_hostname_sync_plan(inventory)", resume_block)
-        self.assertIn("synchronize_instance_pool_names(", resume_block)
+        self.assertIn("synchronize_autoscaling_compute_names(", resume_block)
         resume_call = self.resize.index(
-            "synchronize_instance_pool_names(", resume_start, resume_end
+            "synchronize_autoscaling_compute_names(", resume_start, resume_end
         )
         for normal_operation in (
             "args.mode == 'reconfigure'",

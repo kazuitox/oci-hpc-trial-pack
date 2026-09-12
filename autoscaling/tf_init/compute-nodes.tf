@@ -116,6 +116,8 @@ resource "oci_core_instance" "compute_cluster_instances" {
 
   lifecycle {
     ignore_changes = [
+      display_name,
+      create_vnic_details[0].display_name,
       launch_volume_attachments,
       preserve_data_volumes_created_at_launch,
       freeform_tags["oci_hpc_local_block_volume"],
