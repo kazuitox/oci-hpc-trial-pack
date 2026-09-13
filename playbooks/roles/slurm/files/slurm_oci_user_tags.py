@@ -540,6 +540,16 @@ def reconcile(config):
             failures += 1
             log("scheduler reconciliation deferred: {}".format(error))
         else:
+            registered_nodes = {record["node_name"] for record in snapshots.values()}
+            missing_nodes = sorted(set(allocations) - registered_nodes)
+            if missing_nodes:
+                failures += 1
+                preview = ", ".join(name[:80] for name in missing_nodes[:5])
+                if len(missing_nodes) > 5:
+                    preview += ", ..."
+                log("{} allocated Slurm node(s) have no compute registration in {}: {}. "
+                    "Check compute node state_dir and registration.".format(
+                        len(missing_nodes), config["state_dir"], preview))
             for path, snapshot in snapshots.items():
                 try:
                     correct_allocation(config, path, snapshot, allocations)

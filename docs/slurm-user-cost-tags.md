@@ -49,6 +49,53 @@ journalctl -u slurm-oci-user-tags.service --since '30 minutes ago'
 5. テスト環境でOCI更新を一時的に失敗させ、計算ジョブが継続すること、権限・接続を復旧すると現在の利用者へ反映されることを確認します。
 6. Cost AnalysisとCost Reportsを確認します。同じ1時間内の短いジョブと、数時間にまたがるジョブを分けて比較し、タグの反映時刻と費用の帰属を検証します。
 
+## Computeインスタンスのタグが変わらない場合
+
+`srun --pty /bin/bash -i`でシェルを開いたまま、Computeインスタンスの`user`タグを確認します。終了後は`Management`への復帰を確認します。短時間で終了するジョブは、非同期更新の前に終了してユーザー名が表示されない場合があります。
+
+コントローラーと対象の計算ノードの両方で`sudo cat /etc/slurm/oci-user-tags.json`を実行し、`state_dir`が同じ共有領域を指すことを確認してください。コントローラーの登録件数は次のように確認できます。
+
+```bash
+sudo python3 - <<'PY'
+import json
+from pathlib import Path
+config = json.loads(Path('/etc/slurm/oci-user-tags.json').read_text())
+records = list(Path(config['state_dir']).glob('*.json'))
+print('state_dir:', config['state_dir'])
+print('registered records:', len(records))
+PY
+```
+
+ジョブの割当があるのに登録がない場合、ワーカーは対象ノードのOCIDを特定できず、タグを更新できません。修正版では共有パスと未登録ノードをログに出して失敗を報告します。旧版では登録が0件でも`Succeeded`になっていました。計算ノードの登録エラーは`sudo journalctl -t slurm-oci-user-tags -n 40 --no-pager`で確認できます。登録やフックの成功時にはログを出さないため、ログが空でも未実行とは限りません。
+
+### 保存先が`/nfs/cluster`と`/share`に分かれる既存環境の修正
+
+旧版では外部NFSを追加し、Slurmの状態保存先には使わない構成（`add_nfs=true`、`slurm_nfs=false`）で、自動作成ノードだけが`/share/oci-user-tags`を使う不具合がありました。修正版では通常構成・HA構成とも、コントローラーと同じ`slurm_nfs`条件で保存先を選びます。
+
+以下は、コントローラーの正しい保存先が`/nfs/cluster/oci-user-tags`であることを確認済みの環境向けです。該当する各計算ノードで設定を直して再登録します。Slurmの再起動は不要です。実行中ジョブはワーカーが現在のSlurm割当から復元します。
+
+```bash
+sudo sed -i.before-cost-tags-fix 's#"/share/oci-user-tags"#"/nfs/cluster/oci-user-tags"#' /etc/slurm/oci-user-tags.json
+sudo /usr/local/sbin/slurm-oci-user-tags register --config /etc/slurm/oci-user-tags.json
+```
+
+コントローラーにはノード作成・増設用の古い設定も残るため、次も修正します。Gitの更新だけでは生成済みファイルは変更されません。クラスタの作成・増設・削除処理が実行されていないときに行ってください。
+
+```bash
+for f in /opt/oci-hpc/conf/variables.tf /opt/oci-hpc/autoscaling/clusters/*/variables.tf; do
+  [ -f "$f" ] || continue
+  sudo sed -i.before-cost-tags-fix 's#^variable "slurm_nfs_path" { default = "/share" }#variable "slurm_nfs_path" { default = "/nfs/cluster" }#' "$f"
+  grep -H slurm_nfs_path "$f"
+done
+for f in /opt/oci-hpc/autoscaling/clusters/*/inventory; do
+  [ -f "$f" ] || continue
+  sudo sed -i.before-cost-tags-fix 's#^slurm_nfs_path = /share$#slurm_nfs_path = /nfs/cluster#' "$f"
+  grep -H slurm_nfs_path "$f"
+done
+```
+
+各出力が`/nfs/cluster`を示すことを確認します。予備コントローラーがある場合は、そのノード作成用設定も同様にそろえてください。共有領域にある既存の状態・履歴ファイルは削除しません。
+
 ## 費用の見方と制限
 
 - OCIの更新処理は非同期です。タイマー間隔、対象ノード数、API応答時間によって遅れが生じます。開始から終了までが短いジョブでは、ユーザー名がOCIタグに現れない場合があります。

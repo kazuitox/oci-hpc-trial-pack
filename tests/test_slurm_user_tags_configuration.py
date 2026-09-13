@@ -67,6 +67,7 @@ class SlurmUserTagsConfigurationTests(unittest.TestCase):
             slurm_user_tags_enabled=True,
             slurm_user_tags_state_dir="/mnt/shared cluster/oci-user-tags",
             slurm_user_tags_local_cache_dir="/var/lib/slurm-oci-user-tags",
+            slurm_exec="/usr",
         )
         config = json.loads(rendered)
         self.assertTrue(config["enabled"])
@@ -76,6 +77,22 @@ class SlurmUserTagsConfigurationTests(unittest.TestCase):
         self.assertEqual(config["management_value"], "Management")
         self.assertEqual(config["oci_cli"], "/opt/slurm-oci-user-tags/venv/bin/oci")
         self.assertNotIn("job_tag", config)
+
+    def test_scheduler_binary_path_matches_each_os_slurm_installation(self):
+        for variables_file, expected_path in (
+            ("el_vars.yml", "/usr/bin"),
+            ("ubuntu_vars.yml", "/usr/local/bin"),
+        ):
+            with self.subTest(variables_file=variables_file):
+                os_variables = yaml.safe_load((ROLE / "vars" / variables_file).read_text())
+                rendered = environment().get_template("oci-user-tags.json.j2").render(
+                    slurm_user_tags_enabled=True,
+                    slurm_user_tags_state_dir="/mnt/cluster/oci-user-tags",
+                    slurm_user_tags_local_cache_dir="/var/lib/slurm-oci-user-tags",
+                    **os_variables,
+                )
+                config = json.loads(rendered)
+                self.assertEqual(config["slurm_bin_dir"], expected_path)
 
     def test_accounting_wrapper_reports_failure_without_failing_job(self):
         for mode in ("prolog", "epilog"):
@@ -150,6 +167,43 @@ class SlurmUserTagsConfigurationTests(unittest.TestCase):
         self.assertTrue(schema["variables"]["slurm_user_tags_enabled"]["default"])
         defaults = yaml.safe_load((ROLE / "defaults/main.yml").read_text())
         self.assertTrue(defaults["slurm_user_tags_enabled"])
+
+    def test_controller_and_autoscaling_share_the_selected_slurm_state_path(self):
+        for filename in ("controller.tf", "slurm_ha.tf"):
+            source = (ROOT / filename).read_text()
+            path_selections = re.findall(
+                r"slurm_nfs_path\s*=\s*var\.(\w+)\s*\?\s*var\.(\w+)\s*:\s*var\.(\w+)",
+                source,
+            )
+            # First selection renders the initial inventory; the second writes
+            # the variable template inherited by every autoscaling cluster.
+            self.assertEqual(len(path_selections), 2)
+            for add_nfs, slurm_nfs in ((False, False), (True, False), (True, True)):
+                with self.subTest(filename=filename, add_nfs=add_nfs, slurm_nfs=slurm_nfs):
+                    variables = {
+                        "add_nfs": add_nfs,
+                        "slurm_nfs": slurm_nfs,
+                        "cluster_nfs_path": "/nfs/cluster",
+                        "nfs_source_path": "/share",
+                    }
+                    selected = [
+                        variables[yes] if variables[condition] else variables[no]
+                        for condition, yes, no in path_selections
+                    ]
+                    expected = "/share" if slurm_nfs else "/nfs/cluster"
+                    self.assertEqual(selected, [expected, expected])
+        self.assertIn(
+            'variable "slurm_nfs_path" { default = "${slurm_nfs_path}" }',
+            (ROOT / "conf/variables.tpl").read_text(),
+        )
+        self.assertIn(
+            "slurm_nfs_path = var.slurm_nfs_path,",
+            (ROOT / "autoscaling/tf_init/controller_update.tf").read_text(),
+        )
+        self.assertIn(
+            "slurm_nfs_path = ${slurm_nfs_path}",
+            (ROOT / "autoscaling/tf_init/inventory.tpl").read_text(),
+        )
 
 
 if __name__ == "__main__":

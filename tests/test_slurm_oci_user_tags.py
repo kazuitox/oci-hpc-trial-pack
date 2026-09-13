@@ -403,6 +403,41 @@ for unused in range(10):
             self.assertEqual(process.returncode, 0, stderr.decode("utf-8"))
         self.assertEqual(self.module.read_json(counter), 40)
 
+    def test_empty_registry_is_healthy_when_cluster_has_no_allocations(self):
+        os.unlink(self.path)
+        with mock.patch.object(self.module, "scheduler_allocations", return_value={}):
+            with mock.patch.object(self.module, "apply_latest") as apply:
+                self.assertEqual(self.module.reconcile(self.config), 0)
+                apply.assert_not_called()
+        self.module.log.assert_not_called()
+
+    def test_allocated_nodes_without_registration_report_shared_path_and_failure(self):
+        os.unlink(self.path)
+        allocations = {"compute-1": {"42": {"user": "alice"}}}
+        with mock.patch.object(self.module, "scheduler_allocations", return_value=allocations):
+            with mock.patch.object(self.module, "apply_latest") as apply:
+                self.assertEqual(self.module.reconcile(self.config), 1)
+                apply.assert_not_called()
+        message = self.module.log.call_args.args[0]
+        self.assertIn("1 allocated Slurm node(s) have no compute registration", message)
+        self.assertIn(self.config["state_dir"], message)
+        self.assertIn("compute-1", message)
+
+    def test_unregistered_allocations_do_not_block_valid_registered_nodes(self):
+        allocations = {"compute-1": {"42": {"user": "alice"}}}
+        allocations.update({"missing-{:02d}".format(number): {"43": {"user": "bob"}}
+                            for number in range(20)})
+        with mock.patch.object(self.module, "scheduler_allocations", return_value=allocations):
+            with mock.patch.object(self.module, "apply_latest") as apply:
+                self.assertEqual(self.module.reconcile(self.config), 1)
+                apply.assert_called_once_with(self.config, self.path)
+        self.assertEqual(self.module.desired_owner(self.record()), "alice")
+        message = self.module.log.call_args.args[0]
+        self.assertIn("20 allocated Slurm node(s) have no compute registration", message)
+        self.assertIn("missing-04", message)
+        self.assertNotIn("missing-05", message)
+        self.assertIn(", ...", message)
+
 
 if __name__ == "__main__":
     unittest.main()

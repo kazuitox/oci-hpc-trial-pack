@@ -471,7 +471,7 @@ resource "null_resource" "cluster" {
       slurm_notification_topic_id = local.slurm_notification_topic_id,
       slurm_notification_subscription_id = local.slurm_notification_subscription_id,
       rack_aware = var.rack_aware,
-      slurm_nfs_path = var.add_nfs ? var.nfs_source_path : var.cluster_nfs_path,
+      slurm_nfs_path = var.slurm_nfs ? var.nfs_source_path : var.cluster_nfs_path,
       spack = var.spack,
       install_application = var.install_application,
       install_openfoam = var.install_openfoam,

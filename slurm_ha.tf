@@ -419,7 +419,7 @@ resource "null_resource" "cluster_backup" {
       slurm_notification_admin_email = local.slurm_notification_admin_email,
       slurm_notification_topic_id = local.slurm_notification_topic_id,
       slurm_notification_subscription_id = local.slurm_notification_subscription_id,
-      slurm_nfs_path = var.add_nfs ? var.nfs_source_path : var.cluster_nfs_path,
+      slurm_nfs_path = var.slurm_nfs ? var.nfs_source_path : var.cluster_nfs_path,
       rack_aware = var.rack_aware,
       spack = var.spack,
       install_application = var.install_application,
