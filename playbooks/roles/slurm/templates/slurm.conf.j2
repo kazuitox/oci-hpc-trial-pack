@@ -15,8 +15,11 @@ SlurmUser=slurm
 {% if slurm_job_notifications_enabled | default(false) | bool %}
 MailProg=/usr/local/sbin/slurm-oci-mailprog
 {% endif %}
-{% if pyxis|bool or healthchecks|bool%}
+{% if pyxis|bool or healthchecks|bool or slurm_user_tags_enabled | default(true) | bool %}
 Prolog=/etc/slurm/prolog.d/*
+{% endif %}
+{% if slurm_user_tags_enabled | default(true) | bool %}
+Epilog=/etc/slurm/epilog.d/oci-user-tags.sh
 {% endif %}
 SlurmctldLogFile=/var/log/slurm/slurmctld.log
 SlurmdLogFile=/var/log/slurm/slurmd.log

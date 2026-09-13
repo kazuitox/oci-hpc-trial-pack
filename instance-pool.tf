@@ -34,6 +34,7 @@ resource "oci_core_instance_pool" "instance_pool" {
   freeform_tags = {
       "cluster_name" = local.cluster_name
       "parent_cluster" = local.cluster_name
+      "user" = var.tags
   }
   placement_configurations {
     availability_domain = var.ad

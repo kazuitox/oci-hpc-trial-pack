@@ -1,7 +1,7 @@
 #!/bin/bash
 if [ $# -eq 0 ] || [ $# -eq 1 ]
 then
-  echo "No enough arguments supplied, please supply number of nodes, cluster name, instance type, queue name, trigger Job ID and comma separated list of tags"
+  echo "No enough arguments supplied, please supply number of nodes, cluster name, instance type, queue name, trigger Job ID and optional initial user tag value"
   echo "To avoid deleting clusters if an error occurs. Add -DEBUG as last argument"
   exit
 fi
@@ -75,7 +75,7 @@ if [ -n "$cli_tags" ]; then
 elif [ -n "$q_tags" ]; then
   tags="$q_tags"
 else
-  tags="$USER"
+  tags="Management"
 fi
 
 # sed 安全化

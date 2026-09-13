@@ -74,6 +74,7 @@ resource "oci_core_instance" "compute_cluster_instances" {
   freeform_tags = {
     "cluster_name"                       = local.cluster_name
     "parent_cluster"                     = local.cluster_name
+    "user"                               = var.tags
     "oci_hpc_local_block_volume"         = tostring(tobool(var.use_local_block_volume))
     "oci_hpc_local_block_volume_size"    = tostring(tonumber(var.local_block_volume_size))
     "oci_hpc_local_block_volume_vpus"    = tostring(tonumber(split(".", var.local_block_volume_performance)[0]))
@@ -120,6 +121,7 @@ resource "oci_core_instance" "compute_cluster_instances" {
     ignore_changes = [
       launch_volume_attachments,
       preserve_data_volumes_created_at_launch,
+      freeform_tags["user"],
       freeform_tags["oci_hpc_local_block_volume"],
       freeform_tags["oci_hpc_local_block_volume_size"],
       freeform_tags["oci_hpc_local_block_volume_vpus"],

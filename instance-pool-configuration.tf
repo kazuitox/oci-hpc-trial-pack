@@ -48,6 +48,7 @@ resource "oci_core_instance_configuration" "instance_pool_configuration" {
       freeform_tags = {
         "cluster_name"                       = local.cluster_name
         "parent_cluster"                     = local.cluster_name
+        "user"                               = var.tags
         "oci_hpc_local_block_volume"         = tostring(tobool(var.use_local_block_volume))
         "oci_hpc_local_block_volume_size"    = tostring(tonumber(var.local_block_volume_size))
         "oci_hpc_local_block_volume_vpus"    = tostring(tonumber(split(".", var.local_block_volume_performance)[0]))

@@ -56,6 +56,7 @@ resource "local_file" "inventory" {
     local_block_volume_mount_point = var.local_block_volume_mount_point,
     cluster_network = var.cluster_network,
     slurm = var.slurm,
+    slurm_user_tags_enabled = var.slurm_user_tags_enabled,
     slurm_job_notifications_enabled = var.slurm_job_notifications_enabled,
     slurm_notification_region = var.slurm_notification_region,
     slurm_notification_compartment_id = var.slurm_notification_compartment_id,

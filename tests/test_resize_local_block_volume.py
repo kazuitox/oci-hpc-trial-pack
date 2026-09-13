@@ -33,6 +33,84 @@ def load_resize_functions():
     return namespace
 
 
+class ComputeClusterLaunchCostTagTests(unittest.TestCase):
+    def setUp(self):
+        self.namespace = load_resize_functions()
+
+        class FakeModel:
+            def __init__(self, **kwargs):
+                self.__dict__.update(kwargs)
+
+        self.namespace["oci"].core = SimpleNamespace(
+            models=SimpleNamespace(
+                LaunchInstanceAgentConfigDetails=FakeModel,
+                CreateVnicDetails=FakeModel,
+                LaunchInstanceShapeConfigDetails=FakeModel,
+                LaunchInstanceDetails=FakeModel,
+                LaunchCreateVolumeFromAttributes=FakeModel,
+                LaunchAttachIScsiVolumeDetails=FakeModel,
+            )
+        )
+        self.namespace["computeClient"] = SimpleNamespace(
+            list_vnic_attachments=lambda **kwargs: SimpleNamespace(
+                data=[SimpleNamespace(display_name=None, subnet_id="ocid1.subnet.test")]
+            )
+        )
+        self.instance = SimpleNamespace(
+            id="ocid1.instance.source",
+            agent_config=FakeModel(),
+            display_name="test-cluster-node-2",
+            availability_domain="test-ad",
+            shape="BM.HPC2.36",
+            shape_config=SimpleNamespace(
+                baseline_ocpu_utilization=None,
+                memory_in_gbs=384,
+                ocpus=36,
+                local_disks=1,
+            ),
+            source_details=FakeModel(source_id="ocid1.image.test"),
+            metadata={"ssh_authorized_keys": "test-key"},
+        )
+
+    def launch(self, source_tags, local_scratch=False):
+        self.instance.freeform_tags = source_tags
+        return self.namespace["getLaunchInstanceDetails"](
+            self.instance,
+            "ocid1.compartment.test",
+            "ocid1.computecluster.test",
+            2,
+            0,
+            {
+                "enabled": local_scratch,
+                "size_in_gbs": 100,
+                "vpus_per_gb": 10,
+                "mount_point": "/scratch",
+            },
+        )
+
+    def test_new_node_does_not_inherit_running_users_cost_tag(self):
+        for local_scratch in (False, True):
+            with self.subTest(local_scratch=local_scratch):
+                source_tags = {
+                    "user": "alice",
+                    "cluster_name": "test-cluster",
+                    "parent_cluster": "test-cluster",
+                    "customer": "research",
+                }
+                details = self.launch(source_tags, local_scratch=local_scratch)
+                self.assertEqual(details.freeform_tags["user"], "Management")
+                self.assertEqual(details.freeform_tags["customer"], "research")
+                self.assertEqual(details.freeform_tags["parent_cluster"], "test-cluster")
+                self.assertEqual(source_tags["user"], "alice")
+                self.assertIsNot(details.freeform_tags, source_tags)
+
+    def test_legacy_source_without_tags_still_starts_as_management(self):
+        for source_tags in (None, {}, {"parent_cluster": "test-cluster"}):
+            with self.subTest(source_tags=source_tags):
+                details = self.launch(source_tags)
+                self.assertEqual(details.freeform_tags["user"], "Management")
+
+
 class LocalBlockVolumeAttachmentTests(unittest.TestCase):
     def setUp(self):
         self.namespace = load_resize_functions()

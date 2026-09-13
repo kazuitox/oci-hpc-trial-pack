@@ -16,3 +16,7 @@ slurm_job_notifications_enabled: false
 slurm_notification_registry_path: /opt/oci-hpc/conf/slurm_notification_users.json
 slurm_notification_deployment_id: ""
 slurm_notification_spool_path: /var/spool/slurm-oci-notify
+
+slurm_user_tags_enabled: true
+slurm_user_tags_state_dir: "{{ slurm_nfs_path }}/oci-user-tags"
+slurm_user_tags_local_cache_dir: /var/lib/slurm-oci-user-tags

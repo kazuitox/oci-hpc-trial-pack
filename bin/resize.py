@@ -1763,7 +1763,10 @@ def getLaunchInstanceDetails(instance,comp_ocid,cn_ocid,max_previous_index,index
     splitted_name[-1]=str(max_previous_index+1+index)
     new_display_name = '-'.join(splitted_name)
     launch_freeform_tags = dict(instance.freeform_tags or {})
+    # The source node can be running another user's job. A new node has no
+    # allocation yet and must not inherit that user's runtime cost ownership.
     launch_freeform_tags.update({
+        "user": "Management",
         LOCAL_BLOCK_VOLUME_TAG_ENABLED: "true" if local_block_volume_config["enabled"] else "false",
         LOCAL_BLOCK_VOLUME_TAG_SIZE: str(local_block_volume_config["size_in_gbs"]),
         LOCAL_BLOCK_VOLUME_TAG_VPUS: str(local_block_volume_config["vpus_per_gb"]),

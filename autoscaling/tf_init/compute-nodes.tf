@@ -118,6 +118,7 @@ resource "oci_core_instance" "compute_cluster_instances" {
     ignore_changes = [
       launch_volume_attachments,
       preserve_data_volumes_created_at_launch,
+      freeform_tags["user"],
       freeform_tags["oci_hpc_local_block_volume"],
       freeform_tags["oci_hpc_local_block_volume_size"],
       freeform_tags["oci_hpc_local_block_volume_vpus"],

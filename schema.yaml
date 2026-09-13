@@ -268,6 +268,7 @@ variableGroups:
   - ${pyxis}
   - ${pam}
   - ${sacct_limits}
+  - ${slurm_user_tags_enabled}
   - ${healthchecks}
   visible:
     eq:
@@ -320,7 +321,7 @@ variables:
     - ADVANCED
   tags:
     type: string
-    default: user
+    default: Management
     visible: false
     title: 非表示の内部変数
   timezone:
@@ -1885,6 +1886,12 @@ variables:
     title: SLURM をインストール
     default: true
     description: Autoscaling に必要です
+  slurm_user_tags_enabled:
+    type: boolean
+    title: Slurm の利用者を計算ノードの user タグへ反映
+    default: true
+    description: ジョブ実行中は Slurm のユーザー名、未使用時は Management を設定します。OCI Cost Analysis の利用者別表示を補助します。
+    visible: ${slurm}
   slurm_job_notifications_enabled:
     type: boolean
     title: Slurm ジョブメール通知を有効化

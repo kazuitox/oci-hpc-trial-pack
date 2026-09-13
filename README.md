@@ -143,6 +143,14 @@ Slurm の状態を初期状態に戻したい場合は、次を実行します�
 /opt/oci-hpc/bin/slurm_config.sh --initial
 ```
 
+## ユーザー別のコストタグ
+
+`slurm_user_tags_enabled`（既定値 `true`）を有効にすると、SlurmのProlog／Epilogで計算ノードの利用者を記録し、コントローラーがOCIのfreeformタグ`user`へ反映します。作成時とアイドル時の値は`Management`、ジョブ実行中はSlurmのユーザー名です。ジョブIDをOCIタグへ追加することはありません。
+
+`queues.conf`の`tags`とスタックの`tags`変数の既定値も`Management`です。Cost Analysisでは`user`タグでユーザー別に集計します。対象は計算ノードのCompute費用で、ブートボリュームや共有ストレージの費用配賦は別途必要です。
+
+タグはコントローラーで非同期に更新します。短いジョブはタグ反映前に終了することがあるため、ジョブの実行時間とOCIの費用が厳密に一致する仕組みではありません。設定、IAM、動作確認と制限は[ユーザー別コストタグの運用手順](docs/slurm-user-cost-tags.md)を参照してください。
+
 ## ジョブ投入
 
 Slurm ジョブは通常通り `sbatch` で投入できます。`queues.conf` の `instance_types[].name` を constraint に指定すると、そのインスタンスタイプに対応するクラスターが作成されます。

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Slurm compute user tags every five seconds
+
+[Timer]
+OnBootSec=15s
+OnUnitInactiveSec=5s
+AccuracySec=1s
+Unit=slurm-oci-user-tags.service
+
+[Install]
+WantedBy=timers.target

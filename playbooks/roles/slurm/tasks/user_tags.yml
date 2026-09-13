@@ -1,0 +1,243 @@
+---
+- name: Inspect existing Slurm user tag worker units
+  become: true
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/slurm-oci-user-tags.{{ item }}"
+  loop:
+    - timer
+    - service
+  register: slurm_user_tag_units
+  when: not (slurm_user_tags_enabled | default(true) | bool)
+
+- name: Stop disabled Slurm user tag worker
+  become: true
+  ansible.builtin.systemd:
+    name: "slurm-oci-user-tags.{{ item.item }}"
+    state: stopped
+    enabled: false
+  loop: "{{ slurm_user_tag_units.results | default([]) }}"
+  when:
+    - not (slurm_user_tags_enabled | default(true) | bool)
+    - item.stat.exists | default(false)
+
+- name: Remove disabled Slurm user tag integration only
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/slurm-oci-user-tags.timer
+    - /etc/systemd/system/slurm-oci-user-tags.service
+    - "{{ slurm_conf_path }}/prolog.d/oci-user-tags.sh"
+    - "{{ slurm_conf_path }}/epilog.d/oci-user-tags.sh"
+    - "{{ slurm_conf_path }}/oci-user-tags.json"
+    - /usr/local/sbin/slurm-oci-user-tags
+  notify: reload systemd units
+  when: not (slurm_user_tags_enabled | default(true) | bool)
+
+- name: Install enabled Slurm user tag integration
+  when: slurm_user_tags_enabled | default(true) | bool
+  block:
+    - name: Validate shared Slurm user tag path
+      ansible.builtin.assert:
+        that:
+          - slurm_user_tags_state_dir.startswith('/')
+          - slurm_user_tags_state_dir != '/'
+        fail_msg: Slurm user tags require an absolute shared state path accessible as root on controllers and compute nodes.
+
+    - name: Create protected shared Slurm user tag state directory
+      become: true
+      ansible.builtin.file:
+        path: "{{ slurm_user_tags_state_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      delegate_to: "{{ groups['controller'][0] }}"
+      run_once: true
+
+    - name: Check shared Slurm user tag state visibility
+      become: true
+      ansible.builtin.stat:
+        path: "{{ slurm_user_tags_state_dir }}"
+      register: slurm_user_tags_shared_state
+
+    - name: Require protected shared state on every participant
+      ansible.builtin.assert:
+        that:
+          - slurm_user_tags_shared_state.stat.isdir | default(false)
+          - slurm_user_tags_shared_state.stat.uid | default(-1) == 0
+          - slurm_user_tags_shared_state.stat.mode | default('') == '0700'
+        fail_msg: Slurm user tags require the same shared Slurm filesystem on controllers and compute nodes, writable by root (NFS no_root_squash). Check slurm_nfs_path or disable slurm_user_tags_enabled.
+
+    - name: Create local Slurm user tag paths
+      become: true
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - path: /usr/local/sbin
+          mode: '0755'
+        - path: "{{ slurm_user_tags_local_cache_dir }}"
+          mode: '0700'
+
+    - name: Install Slurm user tag helper
+      become: true
+      ansible.builtin.copy:
+        src: slurm_oci_user_tags.py
+        dest: /usr/local/sbin/slurm-oci-user-tags
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Write protected Slurm user tag configuration
+      become: true
+      ansible.builtin.template:
+        src: oci-user-tags.json.j2
+        dest: "{{ slurm_conf_path }}/oci-user-tags.json"
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Install compute node Slurm user tag hooks
+      when: "'compute' in group_names"
+      block:
+        - name: Create Slurm user tag hook directories
+          become: true
+          ansible.builtin.file:
+            path: "{{ slurm_conf_path }}/{{ item }}.d"
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+          loop:
+            - prolog
+            - epilog
+
+        - name: Install bounded Slurm user tag hooks
+          become: true
+          ansible.builtin.template:
+            src: oci-user-tags-hook.sh.j2
+            dest: "{{ slurm_conf_path }}/{{ item }}.d/oci-user-tags.sh"
+            owner: root
+            group: root
+            mode: '0755'
+          loop:
+            - prolog
+            - epilog
+
+        - name: Register compute node before Slurm starts accepting jobs
+          become: true
+          ansible.builtin.command:
+            argv:
+              - /usr/bin/timeout
+              - --kill-after=1s
+              - 3s
+              - /usr/local/sbin/slurm-oci-user-tags
+              - register
+              - --config
+              - "{{ slurm_conf_path }}/oci-user-tags.json"
+          register: slurm_user_tags_registration
+          changed_when: false
+          failed_when: false
+
+        - name: Report deferred node user tag registration
+          ansible.builtin.debug:
+            msg: "User tag registration was deferred (rc={{ slurm_user_tags_registration.rc }}). The next job hook will retry; inspect the Slurm user tag log if this persists."
+          when: slurm_user_tags_registration.rc != 0
+
+    - name: Install controller Slurm user tag worker
+      when: "'controller' in group_names or 'slurm_backup' in group_names"
+      block:
+        - name: Install Python virtual environment support for controller OCI CLI
+          become: true
+          ansible.builtin.package:
+            name: "{{ ['python3-pip', 'python3-venv'] if ansible_os_family == 'Debian' else ['python3-pip'] }}"
+            state: present
+
+        - name: Create root-owned controller OCI CLI directory
+          become: true
+          ansible.builtin.file:
+            path: /opt/slurm-oci-user-tags
+            state: directory
+            owner: root
+            group: root
+            mode: '0700'
+
+        - name: Create isolated controller OCI CLI environment
+          become: true
+          ansible.builtin.command:
+            argv:
+              - /usr/bin/python3
+              - -m
+              - venv
+              - /opt/slurm-oci-user-tags/venv
+            creates: /opt/slurm-oci-user-tags/venv/bin/python3
+          environment:
+            PYTHONNOUSERSITE: '1'
+
+        - name: Install compatible pip in isolated controller environment
+          become: true
+          ansible.builtin.command:
+            argv:
+              - /opt/slurm-oci-user-tags/venv/bin/python3
+              - -m
+              - pip
+              - install
+              - --upgrade
+              - pip
+          environment:
+            PYTHONNOUSERSITE: '1'
+            PIP_CONFIG_FILE: /dev/null
+            PIP_USER: 'false'
+            PIP_DISABLE_PIP_VERSION_CHECK: '1'
+          register: slurm_user_tags_pip_install
+          changed_when: "'Successfully installed' in slurm_user_tags_pip_install.stdout"
+
+        # pip selects versions compatible with the local Python, including OL8
+        # Python 3.6, using package Requires-Python and dependency metadata.
+        - name: Install OCI CLI in protected controller environment
+          become: true
+          ansible.builtin.pip:
+            name: oci-cli
+            state: present
+            executable: /opt/slurm-oci-user-tags/venv/bin/pip
+            umask: '0077'
+          environment:
+            PYTHONNOUSERSITE: '1'
+            PIP_CONFIG_FILE: /dev/null
+            PIP_USER: 'false'
+            PIP_DISABLE_PIP_VERSION_CHECK: '1'
+
+        - name: Verify isolated controller OCI CLI starts
+          become: true
+          ansible.builtin.command:
+            argv:
+              - /opt/slurm-oci-user-tags/venv/bin/oci
+              - --version
+          environment:
+            PYTHONNOUSERSITE: '1'
+          changed_when: false
+
+        - name: Render Slurm user tag worker units
+          become: true
+          ansible.builtin.template:
+            src: "systemd/slurm-oci-user-tags.{{ item }}.j2"
+            dest: "/etc/systemd/system/slurm-oci-user-tags.{{ item }}"
+            owner: root
+            group: root
+            mode: '0644'
+          loop:
+            - service
+            - timer
+
+        - name: Enable Slurm user tag reconciliation timer
+          become: true
+          ansible.builtin.systemd:
+            name: slurm-oci-user-tags.timer
+            daemon_reload: true
+            state: started
+            enabled: true
