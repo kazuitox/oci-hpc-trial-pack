@@ -8,11 +8,198 @@ import json
 import copy
 import yaml
 import re
+import uuid
+import shutil
 
 lockfile = "/tmp/autoscaling_lock"
 queues_conf_file = "/opt/oci-hpc/conf/queues.conf"
 idle_time = 600
 script_path = '/opt/oci-hpc/bin'
+slurm_command_timeout = 20
+delete_acceptance_timeout = 10
+
+class SafetyCheckError(RuntimeError):
+    """A deletion precondition could not be proved."""
+
+    def __init__(self, message, outcome_unknown=False):
+        super().__init__(message)
+        self.outcome_unknown = outcome_unknown
+
+
+def runSlurm(args):
+    # Do not let inherited output filters hide jobs or make timestamps relative.
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith(('SQUEUE_', 'SINFO_'))}
+    env['SLURM_TIME_FORMAT'] = '%Y-%m-%dT%H:%M:%S'
+    env['LC_ALL'] = 'C'
+    command = args
+    if args[:2] == ['scontrol', 'update'] and os.geteuid() != 0:
+        executable = shutil.which('scontrol')
+        if executable is None:
+            raise SafetyCheckError('scontrol executable was not found')
+        command = ['sudo', '-n', executable] + args[1:]
+    try:
+        result = subprocess.run(command, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, universal_newlines=True,
+                                timeout=slurm_command_timeout, env=env)
+    except subprocess.TimeoutExpired as error:
+        # The controller may have applied the update before the client timed out.
+        raise SafetyCheckError(str(error), outcome_unknown=True)
+    except OSError as error:
+        raise SafetyCheckError(str(error))
+    if result.returncode != 0:
+        raise SafetyCheckError('{} failed ({}): {}'.format(
+            args[0], result.returncode, result.stderr.strip()))
+    return result.stdout
+
+
+def stateTokens(snapshot):
+    return {part.strip('*').upper() for part in snapshot['State'].split('+') if part}
+
+
+def getNodeSnapshot(node):
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', node):
+        raise SafetyCheckError('Invalid node name: ' + node)
+    output = runSlurm(['scontrol', '--local', '--oneliner', 'show', 'node', node])
+    fields = dict(re.findall(r'(?:^|\s)([A-Za-z][A-Za-z0-9_]*)=(\S+)', output))
+    if (fields.get('NodeName') != node or not fields.get('State') or
+            not fields.get('CPUAlloc', '').isdigit()):
+        raise SafetyCheckError('Incomplete node information: ' + node)
+    reason = re.search(r'(?:^|\s)Reason=(.*)', output)
+    fields['Reason'] = re.split(r'\s+\[', reason.group(1), maxsplit=1)[0].strip() if reason else ''
+    return fields
+
+
+def nodeIsQuiescent(snapshot):
+    # CPUAlloc is an extra guard, never the proof of idleness: squeue is checked
+    # separately because SUSPENDED jobs can report zero allocated CPUs.
+    states = stateTokens(snapshot)
+    active = {'ALLOCATED', 'MIXED', 'COMPLETING', 'POWERING_UP',
+              'POWERING_DOWN', 'REBOOT_ISSUED'}
+    return int(snapshot['CPUAlloc']) == 0 and not states.intersection(active) and bool(
+        states.intersection({'IDLE', 'DOWN', 'FAIL', 'FAILING', 'UNKNOWN'}))
+
+
+def nodeHasFailureState(snapshot):
+    return bool(stateTokens(snapshot).intersection(
+        {'DOWN', 'FAIL', 'FAILING', 'INVALID_REG', 'NOT_RESPONDING', 'DRAIN'}))
+
+
+def parseSlurmTime(value):
+    if not value or value.upper() in ('UNKNOWN', 'NONE', 'N/A'):
+        return None
+    try:
+        return datetime.datetime.strptime(value, '%Y-%m-%dT%H:%M:%S')
+    except ValueError:
+        return None
+
+
+def getIdleTime(node, snapshot=None, now=None):
+    snapshot = getNodeSnapshot(node) if snapshot is None else snapshot
+    if not nodeIsQuiescent(snapshot):
+        return None
+    # LastBusyTime is updated only after Slurm has finished the job's cleanup.
+    # A newly registered node must also age from SlurmdStartTime. Either field
+    # can legitimately be Unknown on a failed node, so do not invent a date.
+    timestamps = [parseSlurmTime(snapshot.get(field))
+                  for field in ('LastBusyTime', 'SlurmdStartTime')]
+    timestamps = [timestamp for timestamp in timestamps if timestamp is not None]
+    if not timestamps:
+        return None
+    duration = ((now or datetime.datetime.now()) - max(timestamps)).total_seconds()
+    return duration if duration >= 0 else None
+
+
+def nodeMayBeDeleted(node, snapshot):
+    duration = getIdleTime(node, snapshot)
+    if duration is not None and duration >= idle_time:
+        return True
+    # A failed, unused node with missing timestamps is reclaimed only after the
+    # same two squeue checks and DRAIN fence used for every deletion. This is a
+    # failure-recovery path, not a fabricated "old idle" timestamp.
+    return duration is None and nodeIsQuiescent(snapshot) and nodeHasFailureState(snapshot)
+
+
+def ensureNoJobs(nodes):
+    output = runSlurm(['squeue', '--local', '--all', '--noheader', '--array',
+                      '--states=all', '--nodes=' + ','.join(nodes),
+                      '--format=%i|%T|%N'])
+    terminal = {'COMPLETED', 'CANCELLED', 'FAILED', 'TIMEOUT', 'NODE_FAIL',
+                'PREEMPTED', 'BOOT_FAIL', 'DEADLINE', 'OUT_OF_MEMORY'}
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        fields = [value.strip() for value in line.split('|')]
+        if len(fields) != 3 or not fields[0] or not fields[1]:
+            raise SafetyCheckError('Unrecognized squeue result: ' + line)
+        if fields[1].upper() not in terminal:
+            raise SafetyCheckError('Job {} is {} on {}'.format(*fields))
+
+
+def waitForDeleteAcceptance(cluster_name, process):
+    marker = os.path.join(clusters_path, cluster_name, 'currently_destroying')
+    deadline = time.monotonic() + delete_acceptance_timeout
+    while time.monotonic() < deadline:
+        if os.path.isfile(marker):
+            return True
+        status = process.poll()
+        if status is not None:
+            raise SafetyCheckError('delete_cluster.sh exited {} before accepting deletion'.format(status))
+        time.sleep(.1)
+    # The process may own the resize lock or be between lock and marker. Keeping
+    # DRAIN is safer than allowing a new allocation during an unknown handoff.
+    raise SafetyCheckError('delete_cluster.sh acceptance is unknown', outcome_unknown=True)
+
+
+def deleteClusterSafely(cluster_name):
+    owned_drains = []
+    handoff = 'not_started'
+    reason = 'autoscale-delete-' + uuid.uuid4().hex
+    try:
+        cluster_dir = os.path.join(clusters_path, cluster_name)
+        for marker in ('currently_building', 'currently_destroying'):
+            if os.path.isfile(os.path.join(cluster_dir, marker)):
+                raise SafetyCheckError('Cluster has ' + marker)
+        nodes = getTopology(cluster_name)
+        snapshots = {node: getNodeSnapshot(node) for node in nodes}
+        for node in nodes:
+            if not nodeMayBeDeleted(node, snapshots[node]):
+                raise SafetyCheckError('Node is busy or has not been idle long enough: ' + node)
+        ensureNoJobs(nodes)
+        for node in nodes:
+            if 'DRAIN' not in stateTokens(snapshots[node]):
+                runSlurm(['scontrol', 'update', 'NodeName=' + node,
+                          'State=DRAIN', 'Reason=' + reason])
+                owned_drains.append((node, snapshots[node]['Reason']))
+
+        if set(getTopology(cluster_name)) != set(nodes):
+            raise SafetyCheckError('Cluster membership changed during deletion check')
+        for node in nodes:
+            snapshot = getNodeSnapshot(node)
+            if 'DRAIN' not in stateTokens(snapshot) or not nodeMayBeDeleted(node, snapshot):
+                raise SafetyCheckError('Node became busy or recently active: ' + node)
+        ensureNoJobs(nodes)
+        process = subprocess.Popen([script_path + '/delete_cluster.sh', cluster_name])
+        handoff = 'unknown'
+        waitForDeleteAcceptance(cluster_name, process)
+        handoff = 'accepted'
+        print('Deleting cluster ' + cluster_name + ' after safety checks', flush=True)
+        return True
+    except (SafetyCheckError, OSError) as error:
+        if handoff == 'unknown' and not getattr(error, 'outcome_unknown', False):
+            handoff = 'rejected'
+        print('Skipping deletion of {}: {}'.format(cluster_name, error), flush=True)
+        return False
+    finally:
+        if handoff in ('not_started', 'rejected'):
+            for node, previous_reason in owned_drains:
+                try:
+                    snapshot = getNodeSnapshot(node)
+                    if snapshot['Reason'] == reason and 'DRAIN' in stateTokens(snapshot):
+                        runSlurm(['scontrol', 'update', 'NodeName=' + node,
+                                  'State=UNDRAIN', 'Reason=' + previous_reason])
+                except SafetyCheckError as error:
+                    print('Could not undo autoscaling DRAIN on {}: {}'.format(node, error), flush=True)
 
 
 def israckaware():
@@ -27,17 +214,20 @@ def israckaware():
 
 
 def getTopology(clusterName):
-    out = subprocess.Popen(['scontrol', 'show', 'topology', clusterName],
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
-    stdout, stderr = out.communicate()
-    for item in stdout.strip().split():
-        if item.startswith("Nodes="):
-            nodes_condensed = item.split("Nodes=")[1]
-            out2 = subprocess.Popen(['scontrol', 'show', 'hostname', nodes_condensed],
-                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
-            stdout2, stderr2 = out2.communicate()
-            return stdout2.strip().split()
-    return []
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', clusterName):
+        raise SafetyCheckError('Invalid cluster name: ' + clusterName)
+    output = runSlurm(['scontrol', '--local', 'show', 'topology', clusterName])
+    matches = []
+    for line in output.splitlines():
+        fields = dict(item.split('=', 1) for item in line.split() if '=' in item)
+        if fields.get('SwitchName') == clusterName and fields.get('Nodes'):
+            matches.append(fields['Nodes'])
+    if len(matches) != 1:
+        raise SafetyCheckError('Cannot determine all cluster nodes: ' + clusterName)
+    nodes = runSlurm(['scontrol', 'show', 'hostnames', matches[0]]).split()
+    if not nodes or len(set(nodes)) != len(nodes):
+        raise SafetyCheckError('Empty or duplicate cluster nodes: ' + clusterName)
+    return nodes
 
 
 def getJobs():
@@ -69,30 +259,6 @@ def getNodeDetails(node):
         else:
             continue
     return output
-
-
-def getIdleTime(node):
-    out = subprocess.Popen(["sacct -X -n -S 01/01/01 -N " + node + " -o End | tail -n 1"],
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True, universal_newlines=True)
-    stdout, stderr = out.communicate()
-    last_end_time = None
-    try:
-        last_end_time = datetime.datetime.strptime(stdout.strip(), "%Y-%m-%dT%H:%M:%S")
-    except:
-        pass
-    out = subprocess.Popen(["scontrol show node " + node + " | grep SlurmdStartTime | awk '{print $2}'"],
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True, universal_newlines=True)
-    stdout, stderr = out.communicate()
-    try:
-        cluster_start_time = datetime.datetime.strptime(
-            stdout.split("\n")[0].split("=")[1], "%Y-%m-%dT%H:%M:%S")
-    except:
-        cluster_start_time = datetime.datetime.now() - datetime.timedelta(hours=24)
-    if last_end_time is None:
-        right_time = cluster_start_time
-    else:
-        right_time = max([cluster_start_time, last_end_time])
-    return (datetime.datetime.now() - right_time).total_seconds()
 
 
 def getQueueConf(queue_file):
@@ -279,13 +445,23 @@ def getstatus_slurm():
                                               "running": False, "queue": queue,
                                               "instance_type": instanceType}
             clusters_data[clustername]["nodes"].append(node)
-            state = line.split()[0].strip('"')
-            if state in ['allocated', 'mixed']:
-                clusters_data[clustername]["running"] = True
-            else:
-                node_idle = getIdleTime(node)
+            try:
+                snapshot = getNodeSnapshot(node)
+                node_idle = getIdleTime(node, snapshot)
+                # A failed, unused node whose Slurm timestamps are Unknown is
+                # eligible for the fenced recovery path; it is not assigned an
+                # invented idle age.
+                if node_idle is None:
+                    if nodeIsQuiescent(snapshot) and nodeHasFailureState(snapshot):
+                        node_idle = idle_time
+                    else:
+                        clusters_data[clustername]["running"] = True
+                        continue
                 if clusters_data[clustername]["min_idle"] is None or node_idle < clusters_data[clustername]["min_idle"]:
                     clusters_data[clustername]["min_idle"] = node_idle
+            except SafetyCheckError as error:
+                print('Deletion check unavailable for {}: {}'.format(node, error), flush=True)
+                clusters_data[clustername]["running"] = True
 
     for clusterName in os.listdir(clusters_path):
         cluster_details = parseClusterName(config, clusterName)
@@ -376,9 +552,8 @@ if autoscaling == "true":
                     break
         for cluster in cluster_to_destroy:
             cluster_name = cluster[0]
-            print("Deleting cluster " + cluster_name)
-            subprocess.Popen([script_path + '/delete_cluster.sh', cluster_name])
-            time.sleep(5)
+            if deleteClusterSafely(cluster_name):
+                time.sleep(5)
         for index, cluster in enumerate(cluster_to_build):
             nodes = cluster[0]
             instance_type = cluster[1]
