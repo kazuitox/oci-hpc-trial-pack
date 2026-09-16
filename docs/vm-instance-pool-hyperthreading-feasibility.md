@@ -6,7 +6,7 @@
 
 **OCI の仕様と Terraform Provider の実装上、対応する VM Shape では Instance Configuration に HT（SMT）の On / Off を設定し、その Configuration を参照する Instance Pool を作成できる。** リポジトリが固定している OCI Provider **5.37.0 は対応済み**で、この機能のための Provider 更新は不要。
 
-ただし、これは仕様・公開ソースに基づく実現性判断であり、すべての VM Shape での実動作を保証するものではない。実装後のユーザー試験では **VM.Standard.E6.Flex は正常動作、VM.Standard3.Flex は HT=false の変数設定に対して HT On のまま**という結果になった。Intel は、同じ Shape / Image / AD / OCPU で Configuration を使わず作成した VM では SMT Off を確認した。Configuration 経由では Pool の有無にかかわらず On だった。ただしネットワーク方式などの起動オプションにも差があるため、Configuration の保存・展開に原因があるとまでは断定していない。
+ただし、これは仕様・公開ソースに基づく実現性判断であり、すべての VM Shape での実動作を保証するものではない。実装後のユーザー試験では **VM.Standard.E6.Flex は正常動作、VM.Standard3.Flex は HT=false の変数設定に対して HT On のまま**という結果になった。Intel は、同じ Shape / Image / AD / OCPU で Configuration を使わず作成した VM では SMT Off を確認した。Configuration 経由では Pool の有無にかかわらず On だった。通常作成では VFIO を指定しても SMT Off になり、VFIO 単独の制約では説明できない。Intel の Configuration 作成・保存・展開経路を主な調査対象とする。暗号化・Agent 設定の差などは残るため、原因となる処理は未確定。
 
 初期構築用と Autoscaling 用の `instance-pool-platform.tf` に Shape の対応判定を追加し、両方の `instance-pool-configuration.tf` で VM の HT 設定を反映した。本資料には実装前の調査と、実装後のローカル検証・実環境の観測結果を記録する。
 
@@ -223,9 +223,26 @@ TERRAFORM_BINARY=/path/to/terraform \
 
 リポジトリの初期構築用と Autoscaling 用 `instance-pool-configuration.tf` は、この Intel Shape に `network_type = "VFIO"` を指定している。[Oracle のネットワーク方式の仕様](https://docs.oracle.com/en-us/iaas/Content/Compute/Tasks/instances.htm)では Standard3.Flex は Paravirtualized / SR-IOV の両方をサポートする。調査した公式 SMT 資料には、SR-IOV との組合せに関する制約を確認できなかった。これは制約が存在しないことの証明ではなく、ネットワーク方式が今回の原因だという証拠もまだない。
 
-次に再現試験をする場合は、Agent 設定や暗号化を含む共通の launch details を揃え、通常起動と Configuration 経由起動を比較する。ネットワーク方式の影響は一度にその項目だけを変更して確認する。追加試験の代わりに Oracle へ照会する場合も、上記の起動オプション差を省略せず提示する。
+次に再現試験をする場合は、Agent 設定や暗号化を含む共通の launch details を揃え、通常起動と Configuration 経由起動を比較する。その後、次節の VFIO を指定した通常作成を確認したため、現時点では追加起動よりも Oracle への照会を優先する。上記の起動オプション差も省略せず提示する。
 
 なお、SMT Off の手動作成 VM でも `shape_config.vcpus` は 8 だったため、この値だけで SMT の状態を判定してはならない。`platform_config.is_symmetric_multi_threading_enabled` とゲストのトポロジーを併せて確認する。
+
+### VFIO を指定した通常作成での追加確認
+
+ユーザーが **Instance Configuration を使わない通常の VM 作成**で VFIO と SMT Disable を指定したことを確認した。GetInstance は `network_type=VFIO`、SMT=`false` を返し、ゲストの `lscpu` も 4 CPU / オンライン 0–3 / 1 thread per core だった。Shape、Image、4 OCPU、16 GB、AD、FAULT-DOMAIN-2 は、前の通常作成と Configuration からの単体起動に一致する。
+
+| 作成経路 | network_type | GetInstance の SMT | ゲストで確認した結果 |
+| --- | --- | --- | --- |
+| 通常の VM 作成 | PARAVIRTUALIZED | false | 4 CPU / 1 thread per core |
+| 通常の VM 作成 | VFIO | false | 4 CPU / 1 thread per core |
+| Configuration から単体起動 | VFIO | true | 未採取 |
+| Configuration から Pool 起動 | VFIO | true | 同条件の先行試験で 8 CPU / 2 threads per core |
+
+**VFIO と SMT Off は、この Intel Shape / Image で両立する。** 「VFIO では SMT Off にできない」という一般的な非互換性では、今回の事象を説明できない。Configuration + PARAVIRTUALIZED の試験を行ったわけではない点にも注意する。
+
+通常作成の VFIO VM も、PV 接続ボリュームの転送時暗号化は true、management disabled は false であり、Configuration の入力とは一部の差が残る。これらを含む入力差があるため、保存時に false が失われたという断定はしない。
+
+現時点でネットワーク方式を恒久変更する根拠はなく、追加の推測に基づく Terraform 修正は行わない。次は Oracle に、対象 Configuration の作成要求の受信値、保存値、LaunchInstanceConfiguration / Pool が VM 起動に渡した platform 設定を追跡してもらう。公開モデルと実サービスの対応状況、GET で SMT 項目が返らない理由、既知の制約・不具合も照会対象とする。Provider の別試験で false 送信を確認した事実と、ユーザー環境の作成ログで plan=false を確認した事実は区別して伝える。
 
 ### OS 側で別途確認した不具合
 
