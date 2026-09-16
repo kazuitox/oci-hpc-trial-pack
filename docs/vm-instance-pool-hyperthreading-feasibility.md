@@ -15,7 +15,7 @@
 | VM 起動時の HT 制御 | Oracle 公式仕様で対応を確認 |
 | Instance Configuration の VM 用 HT 属性 | AMD_VM / INTEL_VM の双方で対応を確認 |
 | Instance Pool との接続 | Configuration を指定する公式仕様を確認。ユーザー試験では AMD が正常、Intel は HT On のまま |
-| 現行 Provider 5.37.0 の送信処理 | 両 VM 型で true / false を送信する実装を確認 |
+| 現行 Provider 5.37.0 の送信処理 | 両 VM 型で true / false を送信する実装を確認。追加の実 API 試験で AMD / Intel の false 送信も確認 |
 | Python SDK のリクエスト JSON 生成 | AMD / Intel × false / true の 4 ケース成功 |
 | 対象リージョンの Shape 対応状況 | ap-osaka-1 の対象 AD で、E6.Flex / Standard3.Flex ともに SMT の許容値 true / false を確認 |
 | 実環境の HT 状態 | AMD の GetInstance は SMT=false。Intel は SMT=true、ゲストは 4 コア / 8 オンライン CPU / 2 threads per core |
@@ -154,11 +154,37 @@ TERRAFORM_BINARY=/path/to/terraform \
 
 **GetInstanceConfiguration の応答に SMT 項目がないことだけで、設定が保存されなかった・起動時に無視されたとは断定できない。** 実際に AMD VM の SMT は `false` だった。今回の直接 API 試験は Configuration の作成・取得までであり、Intel VM 起動時に指定が反映されるかを検証するものではない。Intel 作成時の Audit イベントにも HT のリクエスト本文は含まれず、送信値の確認には使用できなかった。
 
+### Intel VM の再作成による確認
+
+同じ条件で再作成した `VM.Standard3.Flex` でも、次を確認した。
+
+- クラスターの `variables.tf` は `hyperthreading = false`。
+- そのクラスターの `instance-pool-configuration.tf` に VM 用の動的 `platform_config` が存在し、`is_symmetric_multi_threading_enabled = tobool(var.hyperthreading)` を指定している。初回・再作成の両方の作成ログでも、plan に `is_symmetric_multi_threading_enabled = false` が含まれていた。
+- 作成された VM の GetInstance は `type=INTEL_VM`、SMT=`true`。4 OCPU / 8 vCPU で、ゲストも 8 CPU すべてオンライン、2 threads per core のまま。
+- 当該 VM が所属する Pool と、その Pool が参照する Instance Configuration の対応も API で確認した。Configuration の取得結果は引き続き SMT 項目なし。
+
+この結果から、単に古いテンプレートや HT=true の変数が使用されたという説明では整合しない。ただし、対象クラスター作成時の送信 HTTP 本文は取得していないため、Provider と OCI サービスのどちらの段階で差異が生じたかは断定しない。公開モデルの対応と ListShapes の許容値だけで、Intel の実機動作を確認済みとは扱わない。
+
+### Provider 5.37.0 の実送信を確認
+
+対象 VM と同じリージョン / AD / Image、4 OCPU / 16 GB の最小構成で、Terraform 1.5.7 と OCI Provider 5.37.0 から一時 Instance Configuration を作成した。AMD / Intel の両方で apply が成功した。VM / Pool は作成せず、試験後の destroy ですべての一時 Configuration を削除した。
+
+[Oracle 公式の詳細ログ設定](https://docs.oracle.com/en-us/iaas/Content/dev/terraform/troubleshooting.htm)に従って `TF_LOG=DEBUG` と `OCI_GO_SDK_DEBUG=v` を有効にし、CreateInstanceConfiguration の送信 HTTP 本文を確認した。SMT に関係する部分は次のとおり。
+
+```json
+{"type":"AMD_VM","isSymmetricMultiThreadingEnabled":false}
+{"type":"INTEL_VM","isSymmetricMultiThreadingEnabled":false}
+```
+
+どちらも作成応答の `platformConfig` は `type` のみだったが、Terraform state では SMT=false だった。したがって、state の false も実 VM の HT Off を保証するものではない。
+
+この試験により、Provider 5.37.0 が Intel の false を送信できることを実際の API 通信で確認できた。対象クラスター自体の送信本文を記録した試験ではなく、一時 Configuration からの VM 起動も行っていないため、Intel の起動経路で反映されない原因までは確定していない。次の確認対象は Instance Configuration → Instance Pool → Intel VM の反映経路である。OS 側の修正でオンライン CPU 数が減っても、この OCI 側の課題が解決したとは扱わない。
+
 ### OS 側で別途確認した不具合
 
 Enterprise Linux 用の既存 `control_hyperthreading.sh` は `thread_siblings_list` をカンマで分割し、2 番目の CPU だけをオフライン化していた。Linux の CPU リストが `0-1` のような範囲形式の場合、対象 CPU を抽出できず、処理が成功扱いのまま全 CPU がオンラインに残ることをテストで再現した。
 
-範囲・カンマ・混在形式を展開して各コアの先頭 CPU を残し、他の兄弟 CPU をオフラインにするよう修正した。書込み失敗はサービスへエラーとして返す。これは OS 側の利用スレッド数を制御する修正であり、OCI の VM platform 設定を変更するものではない。対象 Intel VM がこの不具合に該当するかは、その VM の `thread_siblings_list` で確認する。
+範囲・カンマ・混在形式を展開して各コアの先頭 CPU を残し、他の兄弟 CPU をオフラインにするよう修正した。書込み失敗はサービスへエラーとして返す。これは OS 側の利用スレッド数を制御する修正であり、OCI の VM platform 設定を変更するものではない。OS 側で兄弟 CPU をオフラインにした場合、`lscpu` の総 CPU 数は 8 のままでもよい。4 コアの VM ではオンライン CPU 数が 4、各コアのオンラインスレッド数が 1 であることを確認する。ユーザーが再作成した Intel VM の `cpu0/topology/thread_siblings_list` は実際に `0-1` であり、この不具合に該当することを確認した。修正版スクリプトの実機適用後の結果は未確認。
 
 ## 実環境での合格条件
 
