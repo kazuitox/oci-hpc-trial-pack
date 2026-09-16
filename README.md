@@ -124,12 +124,17 @@ conf/queues.conf.example
 - `max_cluster_count`: 同時に保持できる最大クラスター数。
 - `cluster_network` / `compute_cluster`: 作成方式を指定します。
 - `ad`: 複数 AD を空白区切りで指定すると、作成失敗時に別 AD を試行します。
+- `hyperthreading`: 対応する AMD / Intel VM の Instance Pool では、`false` で HT Off、`true` で HT On を起動時に指定します。VM にはキューの値を使用し、BM 向けの `BIOS` / `SMT` 設定とは独立して制御します。
 - `use_local_block_volume`: 各 Compute node 専用の一時 Block Volume をアタッチします。
 - `local_block_volume_size`: ノードごとの Block Volume サイズ（50 GB 以上の整数）です。
 - `local_block_volume_performance`: `0.  Lower performance`、`10. Balanced performance`、`20. High Performance` のいずれかを指定します。
 - `local_block_volume_mount_point`: ノード内のマウントポイントを200文字以内の絶対パスで指定します。共有 NFS、NVMe、`/home` などの既存パスとは重複できません。
 
 このノード専用 Block Volume は `use_scratch_nfs` で構成するクラスター内共有 NFS とは独立しています。XFS（Oracle Linux）または ext4（Ubuntu/Debian）で初期化し、ノード終了時に自動削除します。稼働中ノードの設定は後から付け替えず、`queues.conf` の変更後に新規作成されるクラスター／ノードから適用されます。初期 Permanent node にはスタック作成時の同名設定が適用されます。
+
+VM の HT 設定は、対象 AD の Shape が返す対応情報を確認して適用します。HT Off を指定した x86 VM で対応を確認できない場合は作成を停止します。HT On で対応情報がない従来の VM は Shape の既定設定を維持し、Arm VM には SMT 設定を送信しません。BM の既存の BIOS / SMT 制御と OS 側の HT 制御は維持します。
+
+OCI の起動時 HT 設定の変更は、新規作成する VM が対象です。Instance Configuration を変更しても、既存 VM の OCI 上の HT 設定には自動反映されません。初期 Permanent node はスタックの `hyperthreading` を使用します。既存環境では、コントローラの `/opt/oci-hpc/autoscaling/tf_init` と関連する playbook を更新してから、新しいクラスターを作成してください。仕様の根拠と実機での確認手順は[VM の HT 制御の調査資料](docs/vm-instance-pool-hyperthreading-feasibility.md)に記載しています。
 
 設定を変更した後は、Slurm 設定を再生成します。
 
