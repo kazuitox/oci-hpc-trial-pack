@@ -19,15 +19,25 @@ then
 fi
 
 disable_ht() {
+	local secondary_threads thread
 	echo -n $0: disabling 
-        for f in `cat /sys/devices/system/cpu/cpu*/topology/thread_siblings_list | sort --unique --numeric-sort`
+        # Linux CPU lists can contain individual IDs, ranges, or both. Keep
+        # the first logical CPU in each core and offline every sibling.
+        secondary_threads=$(cat /sys/devices/system/cpu/cpu*/topology/thread_siblings_list | sort --unique --numeric-sort | awk -F, '{
+                first = 1
+                for (field = 1; field <= NF; field++) {
+                        count = split($field, range, "-")
+                        last = count == 2 ? range[2] : range[1]
+                        for (cpu = range[1]; cpu <= last; cpu++) {
+                                if (first) first = 0
+                                else print cpu
+                        }
+                }
+        }') || return 1
+        for thread in $secondary_threads
         do
-                __th2=`echo $f | awk -F , '{ print $2; }'`
-                if [ "$__th2" != "" ]
-                then
-                        echo -n ' ' cpu"$__th2"
-                        echo 0 > "/sys/devices/system/cpu/cpu"$__th2"/online"
-                fi
+                echo -n ' ' cpu"$thread"
+                echo 0 > "/sys/devices/system/cpu/cpu$thread/online" || return 1
         done
 	echo
 }
@@ -36,11 +46,13 @@ enable_ht() {
 	echo -n $0: enabling 
         for f in `echo /sys/devices/system/cpu/cpu[0-9]*`
         do
-                __enabled=`cat $f"/online"`
-                if [ $__enabled -eq 0 ]
+                # CPU 0 can lack an online file when it cannot be hotplugged.
+                [ -e "$f/online" ] || continue
+                __enabled=$(cat "$f/online") || return 1
+                if [ "$__enabled" -eq 0 ]
                 then
                         echo -n ' ' `basename $f`
-                        echo 1 > $f"/online"
+                        echo 1 > "$f/online" || return 1
                 fi
         done
 	echo ''
@@ -59,11 +71,11 @@ enable_ht() {
 
 case "$1" in
 "1"|"on")
-        enable_ht
+        enable_ht || exit $?
         #rebalance_irqs
         ;;
 "0"|"off")
-        disable_ht
+        disable_ht || exit $?
         #rebalance_irqs
         ;;
 "show")
@@ -78,4 +90,3 @@ echo ''
 lscpu | egrep "On-line|Off-line"
 
 exit 0
-

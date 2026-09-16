@@ -23,6 +23,7 @@
 
 ### Fixed
 
+- Enterprise Linux の OS 側 HT 無効化処理が、`0-1` などの範囲形式の CPU リストにも対応するようにしました。各コアで 1 スレッドを残し、CPU の状態変更に失敗した場合はエラーを返します。
 - 対応する AMD / Intel VM の Instance Pool で、`hyperthreading` を Instance Configuration に反映し、初期ノードと Autoscaling ノードの HT を起動時に制御するようにしました。起動時に HT が無効な Ubuntu VM では、OS 側の不要な SMT 書込みを省略します。
 - OpenComposerをデプロイ時にPassengerアプリとして事前登録し、Open OnDemand統合画面がJavaScriptエラー時にも白画面にならないようにしました。
 

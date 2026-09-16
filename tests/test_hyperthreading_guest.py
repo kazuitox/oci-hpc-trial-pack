@@ -6,10 +6,135 @@ import unittest
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
+EL_SCRIPT = (
+    REPOSITORY_ROOT
+    / "playbooks/roles/hyperthreading/files/control_hyperthreading.sh"
+)
 UBUNTU_SCRIPT = (
     REPOSITORY_ROOT
     / "playbooks/roles/hyperthreading/files/control_hyperthreading_ubuntu.sh"
 )
+
+
+class EnterpriseLinuxHyperthreadingTests(unittest.TestCase):
+    def run_control(self, siblings, action, offline_cpus=(), blocked_cpu=None):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            cpu_root = temporary_path / "cpu"
+            commands_path = temporary_path / "bin"
+            commands_path.mkdir()
+            for cpu, sibling_list in enumerate(siblings):
+                cpu_path = cpu_root / f"cpu{cpu}"
+                topology = cpu_path / "topology"
+                topology.mkdir(parents=True)
+                (topology / "thread_siblings_list").write_text(
+                    sibling_list + "\n", encoding="utf-8"
+                )
+                online = cpu_path / "online"
+                if cpu == blocked_cpu:
+                    # A directory causes an actual redirection failure even
+                    # when the tests run as root.
+                    online.mkdir()
+                elif cpu != 0:
+                    online.write_text(
+                        "0\n" if cpu in offline_cpus else "1\n", encoding="utf-8"
+                    )
+            commands = {
+                "id": "printf '0\\n'\n",
+                "lscpu": "printf 'On-line CPU(s) list: fixture\\n'\n",
+            }
+            for name, body in commands.items():
+                executable = commands_path / name
+                executable.write_text("#!/bin/bash\n" + body, encoding="utf-8")
+                executable.chmod(0o755)
+            # Redirect sysfs to real files and replace the script's fixed PATH
+            # so the root check and final display are safe to run on any host.
+            source = EL_SCRIPT.read_text(encoding="utf-8")
+            source = source.replace("/sys/devices/system/cpu", str(cpu_root))
+            source = "\n".join(
+                f'PATH="{commands_path}:$PATH"' if line.startswith("PATH=") else line
+                for line in source.splitlines()
+            )
+            script = temporary_path / "control_hyperthreading.sh"
+            script.write_text(source + "\n", encoding="utf-8")
+            result = subprocess.run(
+                ["/bin/bash", str(script), action],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            online_states = {}
+            for cpu in range(len(siblings)):
+                online = cpu_root / f"cpu{cpu}" / "online"
+                if online.is_file():
+                    online_states[cpu] = online.read_text(encoding="utf-8").strip()
+            return result, online_states
+
+    def test_disabling_keeps_one_logical_cpu_per_core(self):
+        cases = [
+            (
+                "adjacent ranges",
+                ["0-1", "0-1", "2-3", "2-3", "4-5", "4-5", "6-7", "6-7"],
+                {1, 3, 5, 7},
+            ),
+            (
+                "separated IDs",
+                ["0,4", "1,5", "2,6", "3,7", "0,4", "1,5", "2,6", "3,7"],
+                {4, 5, 6, 7},
+            ),
+            ("four adjacent threads", ["0-3"] * 4, {1, 2, 3}),
+            ("four separated threads", ["0,1,2,3"] * 4, {1, 2, 3}),
+            (
+                "mixed IDs and ranges",
+                ["0-1,4,5", "0-1,4,5", "2-3,6-7", "2-3,6-7"] * 2,
+                {1, 3, 4, 5, 6, 7},
+            ),
+        ]
+        for name, siblings, offline_cpus in cases:
+            for action in ["off", "0"]:
+                with self.subTest(topology=name, action=action):
+                    result, online_states = self.run_control(siblings, action)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stderr, "")
+                    self.assertEqual(
+                        online_states,
+                        {
+                            cpu: "0" if cpu in offline_cpus else "1"
+                            for cpu in range(1, len(siblings))
+                        },
+                    )
+
+    def test_single_threaded_guest_is_a_no_op(self):
+        result, online_states = self.run_control(["0", "1", "2", "3"], "off")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(online_states, {1: "1", 2: "1", 3: "1"})
+
+    def test_enabling_restores_offline_cpus_without_cpu_zero_online_file(self):
+        for action in ["on", "1"]:
+            with self.subTest(action=action):
+                result, online_states = self.run_control(
+                    ["0-1", "0-1", "2-3", "2-3"], action, offline_cpus={1, 3}
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stderr, "")
+                self.assertEqual(online_states, {1: "1", 2: "1", 3: "1"})
+
+    def test_show_does_not_change_online_cpus(self):
+        result, online_states = self.run_control(
+            ["0-1", "0-1", "2-3", "2-3"], "show", offline_cpus={1, 3}
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(online_states, {1: "0", 2: "1", 3: "0"})
+
+    def test_failed_write_stops_and_is_reported_to_the_service(self):
+        result, online_states = self.run_control(
+            ["0-1", "0-1", "2-3", "2-3"], "off", blocked_cpu=1
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("/cpu1/online", result.stderr)
+        self.assertEqual(online_states, {2: "1", 3: "1"})
 
 
 class UbuntuHyperthreadingTests(unittest.TestCase):

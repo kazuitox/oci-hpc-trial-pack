@@ -6,19 +6,19 @@
 
 **OCI の仕様と Terraform Provider の実装上、対応する VM Shape では Instance Configuration に HT（SMT）の On / Off を設定し、その Configuration を参照する Instance Pool を作成できる。** リポジトリが固定している OCI Provider **5.37.0 は対応済み**で、この機能のための Provider 更新は不要。
 
-ただし、これは仕様・公開ソース・ローカルでのリクエスト生成確認に基づく実現性判断である。**実際の OCI サービスで Configuration → Pool → VM を作成して HT を確認する試験は未実施**。すべての VM Shape で利用可能と断定するものではない。
+ただし、これは仕様・公開ソースに基づく実現性判断であり、すべての VM Shape での実動作を保証するものではない。実装後のユーザー試験では **VM.Standard.E6.Flex は正常動作、VM.Standard3.Flex は HT=false の変数設定に対して HT On のまま**という結果になった。Intel については原因の切り分けを継続している。
 
-この資料は実装前の調査記録である。調査後、初期構築用と Autoscaling 用の `instance-pool-platform.tf` に Shape の対応判定を追加し、両方の `instance-pool-configuration.tf` で VM の HT 設定を反映した。実際の OCI での起動試験は引き続き未実施。
+初期構築用と Autoscaling 用の `instance-pool-platform.tf` に Shape の対応判定を追加し、両方の `instance-pool-configuration.tf` で VM の HT 設定を反映した。本資料には実装前の調査と、実装後のローカル検証・実環境の観測結果を記録する。
 
 | 確認対象 | 結果 |
 | --- | --- |
 | VM 起動時の HT 制御 | Oracle 公式仕様で対応を確認 |
 | Instance Configuration の VM 用 HT 属性 | AMD_VM / INTEL_VM の双方で対応を確認 |
-| Instance Pool との接続 | Configuration を指定して起動する公式仕様を確認。HT を持つ Configuration の実機起動は未検証 |
+| Instance Pool との接続 | Configuration を指定する公式仕様を確認。ユーザー試験では AMD が正常、Intel は HT On のまま |
 | 現行 Provider 5.37.0 の送信処理 | 両 VM 型で true / false を送信する実装を確認 |
 | Python SDK のリクエスト JSON 生成 | AMD / Intel × false / true の 4 ケース成功 |
-| 対象リージョンの Shape 対応状況 | 読み取り API が 404 `NotAuthorizedOrNotFound` を返し、取得できず |
-| 実環境の Terraform plan / apply、ゲスト OS の HT 状態 | 未実施。実装後のオフライン検証は後述 |
+| 対象リージョンの Shape 対応状況 | ap-osaka-1 の対象 AD で、E6.Flex / Standard3.Flex ともに SMT の許容値 true / false を確認 |
+| 実環境の HT 状態 | AMD の GetInstance は SMT=false。Intel は SMT=true、ゲストは 4 コア / 8 オンライン CPU / 2 threads per core |
 
 ## OCI と Provider の根拠
 
@@ -141,12 +141,31 @@ TERRAFORM_BINARY=/path/to/terraform \
 
 既存の Provider ミラーを使用する場合は `TF_PLUGIN_DIR` にそのディレクトリを指定する。Terraform がない、または 1.7 未満の場合は mock plan テストをスキップする。mock は OCI への接続やリソース作成を行わず、実機試験の代替ではない。
 
+## 実環境での追加調査（2026-09-16）
+
+ユーザーが作成した ap-osaka-1 の VM と対応する Instance Pool / Configuration を読み取り API で確認した。
+
+- `VM.Standard3.Flex`: 4 OCPU。生成済み `variables.tf` の `hyperthreading` は `false` だが、GetInstance の `platform_config.is_symmetric_multi_threading_enabled` は `true`。ゲストの `lscpu` も 8 CPU がすべてオンライン、4 コア、2 threads per core を示した。単なるコンソール上の vCPU 数の表示差ではない。
+- 同じコントローラが作成した `VM.Standard.E6.Flex`: ユーザーは正常動作を報告。GetInstance の SMT は `false` だった。
+- 同じ AD の ListShapes は、両 Shape に SMT 許容値 `[true, false]` を返した。
+- Intel の GetInstanceConfiguration の `platformConfig` は `{"type":"INTEL_VM"}` のみで、SMT 項目を含まなかった。
+
+この取得結果を切り分けるため、Python SDK 2.163.1 から一時 Instance Configuration を直接作成した。AMD / Intel × true / false の各送信 HTTP 本文に `isSymmetricMultiThreadingEnabled` と指定した boolean が含まれることを確認したが、いずれも作成応答と後続 GET の `platformConfig` は `type` のみだった。試験用 Configuration はすべて削除し、試験用 VM / Pool は作成していない。
+
+**GetInstanceConfiguration の応答に SMT 項目がないことだけで、設定が保存されなかった・起動時に無視されたとは断定できない。** 実際に AMD VM の SMT は `false` だった。今回の直接 API 試験は Configuration の作成・取得までであり、Intel VM 起動時に指定が反映されるかを検証するものではない。Intel 作成時の Audit イベントにも HT のリクエスト本文は含まれず、送信値の確認には使用できなかった。
+
+### OS 側で別途確認した不具合
+
+Enterprise Linux 用の既存 `control_hyperthreading.sh` は `thread_siblings_list` をカンマで分割し、2 番目の CPU だけをオフライン化していた。Linux の CPU リストが `0-1` のような範囲形式の場合、対象 CPU を抽出できず、処理が成功扱いのまま全 CPU がオンラインに残ることをテストで再現した。
+
+範囲・カンマ・混在形式を展開して各コアの先頭 CPU を残し、他の兄弟 CPU をオフラインにするよう修正した。書込み失敗はサービスへエラーとして返す。これは OS 側の利用スレッド数を制御する修正であり、OCI の VM platform 設定を変更するものではない。対象 Intel VM がこの不具合に該当するかは、その VM の `thread_siblings_list` で確認する。
+
 ## 実環境での合格条件
 
 対象 Compartment、AD、Subnet、対応 Image とそれらを利用できる認証を定め、AMD / Intel の対象 Shape ごとに次を確認する。
 
 1. ListShapes で platform type と要求する HT 値の許容を確認する。
-2. HT=false を指定した Instance Configuration を作成し、取得結果の `instance_details.launch_details.platform_config` に VM 型と false が保存されることを確認する。
+2. HT=false を指定した Instance Configuration を作成する。plan と送信内容の `instance_details.launch_details.platform_config` に正しい VM 型と false が含まれることを確認する。上記の実測では GET が SMT 項目を返さないため、取得結果だけで保存値を判定しない。
 3. その Configuration を使い、1 台の Instance Pool を作成する。Pool と VM が RUNNING になることを確認する。
 4. VM の取得結果に `platform_config.is_symmetric_multi_threading_enabled=false` が反映され、ゲスト OS の `lscpu` が `Thread(s) per core: 1` を示すことを確認する。
 5. 同じ Shape / OCPU / Memory / Image で HT=true の Configuration と Pool を作成し、API の値が true、`Thread(s) per core: 2` になることを確認する。`queues.conf` / `var.hyperthreading` も true に揃え、OS 側の処理が HT を無効化しない条件で比較する。
