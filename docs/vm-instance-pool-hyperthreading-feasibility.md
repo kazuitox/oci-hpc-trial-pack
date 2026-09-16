@@ -6,7 +6,7 @@
 
 **OCI の仕様と Terraform Provider の実装上、対応する VM Shape では Instance Configuration に HT（SMT）の On / Off を設定し、その Configuration を参照する Instance Pool を作成できる。** リポジトリが固定している OCI Provider **5.37.0 は対応済み**で、この機能のための Provider 更新は不要。
 
-ただし、これは仕様・公開ソースに基づく実現性判断であり、すべての VM Shape での実動作を保証するものではない。実装後のユーザー試験では **VM.Standard.E6.Flex は正常動作、VM.Standard3.Flex は HT=false の変数設定に対して HT On のまま**という結果になった。Intel については原因の切り分けを継続している。
+ただし、これは仕様・公開ソースに基づく実現性判断であり、すべての VM Shape での実動作を保証するものではない。実装後のユーザー試験では **VM.Standard.E6.Flex は正常動作、VM.Standard3.Flex は HT=false の変数設定に対して HT On のまま**という結果になった。Intel は、同じ Shape / Image / AD / OCPU で Configuration を使わず作成した VM では SMT Off を確認した。Configuration 経由では Pool の有無にかかわらず On だった。ただしネットワーク方式などの起動オプションにも差があるため、Configuration の保存・展開に原因があるとまでは断定していない。
 
 初期構築用と Autoscaling 用の `instance-pool-platform.tf` に Shape の対応判定を追加し、両方の `instance-pool-configuration.tf` で VM の HT 設定を反映した。本資料には実装前の調査と、実装後のローカル検証・実環境の観測結果を記録する。
 
@@ -18,7 +18,7 @@
 | 現行 Provider 5.37.0 の送信処理 | 両 VM 型で true / false を送信する実装を確認。追加の実 API 試験で AMD / Intel の false 送信も確認 |
 | Python SDK のリクエスト JSON 生成 | AMD / Intel × false / true の 4 ケース成功 |
 | 対象リージョンの Shape 対応状況 | ap-osaka-1 の対象 AD で、E6.Flex / Standard3.Flex ともに SMT の許容値 true / false を確認 |
-| 実環境の HT 状態 | AMD の GetInstance は SMT=false。Intel は SMT=true、ゲストは 4 コア / 8 オンライン CPU / 2 threads per core |
+| 実環境の HT 状態 | AMD は SMT=false。Intel は Configuration 経由が SMT=true、通常の手動作成は SMT=false / ゲスト 4 CPU・1 thread per core |
 
 ## OCI と Provider の根拠
 
@@ -197,12 +197,35 @@ TERRAFORM_BINARY=/path/to/terraform \
 | GetInstance の SMT | true | true |
 | GetInstance の vCPU 数 | 8 | 8 |
 
-**Pool を経由しない起動でも SMT=true を観測したため、Pool に固有の問題だけでは説明できない。** Configuration の保存・展開、または VM の起動段階を引き続き切り分ける必要がある。次の比較は、Configuration を使用せず、同じ Image / Shape / OCPU / Memory / AD で通常の LaunchInstance に SMT=false を直接指定する試験である。この単体 VM のゲスト OS 側の確認はまだ行っていない。
+**Pool を経由しない起動でも SMT=true を観測したため、Pool に固有の問題だけでは説明できない。** Configuration の保存・展開、または VM の起動段階を引き続き切り分ける必要がある。続いて、ユーザーが Configuration を使わない通常の VM 作成で SMT Disable を指定した（次節）。この単体 VM のゲスト OS 側の確認はまだ行っていない。
 
 起動手順上、次の点にも注意する。
 
 - コンソールからの起動では、Configuration に保存された `isManagementDisabled=true` に対して起動画面が false を送信し、上書き拒否エラーとなった。CLI で `agentConfig` を省略し、保存値を継承すると起動できた。
 - クラスター削除に伴って Configuration も削除されるため、過去の OCID を再使用すると `IncorrectState: instance configuration ... is Deleted` になる。比較対象のクラスターを保持し、現在の Pool が参照する Configuration ID を確認してから起動する。
+
+### Configuration を使用しない手動作成との比較
+
+ユーザーが通常の VM 作成で SMT Disable を指定した Intel VM を確認した。GetInstance の SMT は `false`、ゲストの `lscpu` は CPU 数 4、オンライン CPU 0–3、4 コア、1 thread per core だった。
+
+| 項目 | Configuration から単体起動 | Configuration なしの手動作成 |
+| --- | --- | --- |
+| Shape / OCPU / Memory | VM.Standard3.Flex / 4 / 16 GB | 同左 |
+| Image / AD / Fault Domain | 同一 Image、ap-osaka-1 の同一 AD、FAULT-DOMAIN-2 | 同左 |
+| GetInstance の SMT | true | false |
+| GetInstance の vCPU 数 | 8 | 8 |
+| ゲストの CPU 数 / threads per core | 未採取 | 4 / 1 |
+| network_type | VFIO | PARAVIRTUALIZED |
+| is_pv_encryption_in_transit_enabled | false | true |
+| is_management_disabled | true | false |
+
+**この Intel Shape / Image で SMT Off は実現できる。** 一方、Configuration を使った経路と通常作成では結果が異なる。基本の計算資源条件だけでなく Fault Domain も一致したが、ネットワーク方式、転送時暗号化、Agent 設定は異なる。したがって現時点で Configuration のサービス不具合と断定せず、これらの差を含めて確認する。
+
+リポジトリの初期構築用と Autoscaling 用 `instance-pool-configuration.tf` は、この Intel Shape に `network_type = "VFIO"` を指定している。[Oracle のネットワーク方式の仕様](https://docs.oracle.com/en-us/iaas/Content/Compute/Tasks/instances.htm)では Standard3.Flex は Paravirtualized / SR-IOV の両方をサポートする。調査した公式 SMT 資料には、SR-IOV との組合せに関する制約を確認できなかった。これは制約が存在しないことの証明ではなく、ネットワーク方式が今回の原因だという証拠もまだない。
+
+次に再現試験をする場合は、Agent 設定や暗号化を含む共通の launch details を揃え、通常起動と Configuration 経由起動を比較する。ネットワーク方式の影響は一度にその項目だけを変更して確認する。追加試験の代わりに Oracle へ照会する場合も、上記の起動オプション差を省略せず提示する。
+
+なお、SMT Off の手動作成 VM でも `shape_config.vcpus` は 8 だったため、この値だけで SMT の状態を判定してはならない。`platform_config.is_symmetric_multi_threading_enabled` とゲストのトポロジーを併せて確認する。
 
 ### OS 側で別途確認した不具合
 

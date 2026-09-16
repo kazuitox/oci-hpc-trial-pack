@@ -134,7 +134,7 @@ conf/queues.conf.example
 
 VM の HT 設定は、対象 AD の Shape が返す対応情報を確認して適用します。HT Off を指定した x86 VM で対応を確認できない場合は作成を停止します。HT On で対応情報がない従来の VM は Shape の既定設定を維持し、Arm VM には SMT 設定を送信しません。BM の既存の BIOS / SMT 制御と OS 側の HT 制御は維持します。
 
-2026-09-16 の実機試験では、`VM.Standard.E6.Flex` の HT Off は確認できましたが、`VM.Standard3.Flex` は `hyperthreading=false` と修正版テンプレートを使用しても OCI 側が HT On のままとなる事象を調査中です。同じ Instance Configuration から Pool を経由せずに単体起動した VM でも、HT On を確認しました。Enterprise Linux の OS 側処理は、Intel VM で観測された `0-1` 形式の CPU リストにも対応しています。この OS 側の制御はオンラインスレッド数を減らしますが、OCI 上の HT 設定は変更しません。
+2026-09-16 の実機試験では、`VM.Standard.E6.Flex` の HT Off は確認できましたが、`VM.Standard3.Flex` は `hyperthreading=false` と修正版テンプレートを使用しても OCI 側が HT On のままとなる事象を調査中です。同じ Instance Configuration から Pool を経由せずに単体起動した VM でも、HT On を確認しました。Configuration を使わない手動作成では HT Off を確認できましたが、ネットワーク方式などの起動設定にも差があり、原因は未確定です。Enterprise Linux の OS 側処理は、Intel VM で観測された `0-1` 形式の CPU リストにも対応しています。この OS 側の制御はオンラインスレッド数を減らしますが、OCI 上の HT 設定は変更しません。
 
 OCI の起動時 HT 設定の変更は、新規作成する VM が対象です。Instance Configuration を変更しても、既存 VM の OCI 上の HT 設定には自動反映されません。初期 Permanent node はスタックの `hyperthreading` を使用します。既存環境では、コントローラの `/opt/oci-hpc/autoscaling/tf_init` と関連する playbook を更新してから、新しいクラスターを作成してください。仕様の根拠と実機での確認手順は[VM の HT 制御の調査資料](docs/vm-instance-pool-hyperthreading-feasibility.md)に記載しています。
 
