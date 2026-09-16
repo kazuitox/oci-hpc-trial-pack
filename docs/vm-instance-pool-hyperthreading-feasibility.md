@@ -178,7 +178,31 @@ TERRAFORM_BINARY=/path/to/terraform \
 
 どちらも作成応答の `platformConfig` は `type` のみだったが、Terraform state では SMT=false だった。したがって、state の false も実 VM の HT Off を保証するものではない。
 
-この試験により、Provider 5.37.0 が Intel の false を送信できることを実際の API 通信で確認できた。対象クラスター自体の送信本文を記録した試験ではなく、一時 Configuration からの VM 起動も行っていないため、Intel の起動経路で反映されない原因までは確定していない。次の確認対象は Instance Configuration → Instance Pool → Intel VM の反映経路である。OS 側の修正でオンライン CPU 数が減っても、この OCI 側の課題が解決したとは扱わない。
+この試験により、Provider 5.37.0 が Intel の false を送信できることを実際の API 通信で確認できた。対象クラスター自体の送信本文を記録した試験ではなく、一時 Configuration からの VM 起動も行っていないため、Intel の起動経路で反映されない原因までは確定していない。続いて、下記のとおり同一 Configuration からの単体起動も比較した。OS 側の修正でオンライン CPU 数が減っても、この OCI 側の課題が解決したとは扱わない。
+
+### 同一 Configuration からの単体起動と Pool 起動の比較
+
+ユーザーが Intel クラスターを再作成し、その新しい Instance Configuration を指定して CLI の `launch-compute-instance` を実行した。起動リクエストでは不足している `createVnicDetails.subnetId` だけを補い、`platformConfig` / `agentConfig` は指定しなかった。
+
+作成した単体 VM と、同じ Configuration を参照する Pool に所属する VM を GetInstance で比較した。
+
+| 項目 | Pool 経由 | Configuration から単体起動 |
+| --- | --- | --- |
+| 作成時刻（UTC、2026-09-16） | 13:25:23 | 13:26:29 |
+| 状態 | RUNNING | RUNNING |
+| Shape / OCPU / Memory | VM.Standard3.Flex / 4 / 16 GB | 同左 |
+| Image / AD | 同一 Image、ap-osaka-1 の同一 AD | 同左 |
+| Fault Domain | FAULT-DOMAIN-3 | FAULT-DOMAIN-2 |
+| platform type | INTEL_VM | INTEL_VM |
+| GetInstance の SMT | true | true |
+| GetInstance の vCPU 数 | 8 | 8 |
+
+**Pool を経由しない起動でも SMT=true を観測したため、Pool に固有の問題だけでは説明できない。** Configuration の保存・展開、または VM の起動段階を引き続き切り分ける必要がある。次の比較は、Configuration を使用せず、同じ Image / Shape / OCPU / Memory / AD で通常の LaunchInstance に SMT=false を直接指定する試験である。この単体 VM のゲスト OS 側の確認はまだ行っていない。
+
+起動手順上、次の点にも注意する。
+
+- コンソールからの起動では、Configuration に保存された `isManagementDisabled=true` に対して起動画面が false を送信し、上書き拒否エラーとなった。CLI で `agentConfig` を省略し、保存値を継承すると起動できた。
+- クラスター削除に伴って Configuration も削除されるため、過去の OCID を再使用すると `IncorrectState: instance configuration ... is Deleted` になる。比較対象のクラスターを保持し、現在の Pool が参照する Configuration ID を確認してから起動する。
 
 ### OS 側で別途確認した不具合
 
