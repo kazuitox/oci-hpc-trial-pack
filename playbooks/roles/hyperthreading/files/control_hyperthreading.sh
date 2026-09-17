@@ -18,6 +18,19 @@ then
         exit 1
 fi
 
+# VM SMT is controlled at OCI launch time. In particular, never offline Intel
+# VM siblings or re-enable them through an old unit's ExecStop=... on.
+virtualization=$(systemd-detect-virt --vm)
+virtualization_status=$?
+if [ "$virtualization_status" -eq 0 ] && [ -n "$virtualization" ] && [ "$virtualization" != none ]; then
+        echo "$0: VM detected ($virtualization); guest HT control is disabled"
+        exit 0
+fi
+if [ "$virtualization_status" -ne 1 ] || [ "$virtualization" != none ]; then
+        echo "$0: cannot confirm bare metal; refusing to change CPU state" >&2
+        exit 1
+fi
+
 disable_ht() {
 	local secondary_threads thread
 	echo -n $0: disabling 

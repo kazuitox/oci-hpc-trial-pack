@@ -1,12 +1,44 @@
 # Instance Pool の VM Hyperthreading 制御：実現性調査
 
-調査日: 2026-09-16
+調査日: 2026-09-16（実機検証結果の追記: 2026-09-17）
 
-## 結論と検証範囲
+## 現在の対応範囲（2026-09-17）
+
+ユーザーの方針により、VM の HT 制御は **AMD VM の OCI 起動時設定だけ**を対象とする。Intel VM の HT Off と、VM での OS 側 HT 制御は対象外とし、Slurm への独自パッチや CPU 固定・隔離設定の変更も導入しない。
+
+| 対象 | 現行の処理 |
+| --- | --- |
+| AMD VM | ListShapes の型と許容値を確認し、OCI platform_config に `hyperthreading` を反映 |
+| Intel VM / `hyperthreading=false` | 初期構築・Autoscaling ともに Terraform の precondition で作成前に拒否 |
+| Intel VM / `hyperthreading=true` | HT 用 platform_config を送信せず、Shape の既定設定を維持 |
+| すべての VM のゲスト OS | HT サービスを新規導入せず、スクリプトの on / off も CPU 状態を変更しない |
+| ベアメタル | 既存の BIOS / SMT と OS 側の HT 制御を維持 |
+
+Ansible role と両 OS 用スクリプトが `systemd-detect-virt --vm` で実行先を判定する。VM と判定した場合はゲストの CPU を変更せず、判定に失敗した場合も変更を行わずエラーにする。BM と判定でき、HT 無効化が要求されたときだけ既存の OS 側処理を実行する。
+
+4 つの playbook は HT の指定値によらず role を呼び出す。これは既存 VM のサービスを残さないためであり、HT=true の BM に無効化処理を追加するものではない。既存 VM では、存在する制御スクリプトだけに VM ガードを反映し、両 HT サービスの自動起動を無効化する。`ExecStop=... on` による CPU 状態変更を避けるためサービスは停止しない。`active (exited)` が残る場合がある。
+
+**すでに OS 側で CPU がオフライン化された Intel VM の状態は、この更新では戻さない。** ジョブ終了後に `hyperthreading=true` で再作成する。既存ノードへ適用する場合も、対象ノードに修正版 playbook / スクリプトが反映されるまでは旧サービスの動作は変わらない。
+
+Terraform 1.9.8 / OCI Provider 5.37.0 の mock 検証で、初期構築・Autoscaling 各 41 ケース（合計 82 ケース）が成功した。Intel Standard3 / Optimized3 の false 拒否、true の HT block 未送信、AMD の On / Off、BM / Arm と対応情報欠落時の既存動作を確認した。実 OCI リソースは作成していない。
+
+OS 用スクリプトの 14 テストで、VM の on / off が既存の CPU 状態を変えないこと、判定失敗時に書き込まないこと、BM の従来処理を確認した。Ansible 2.20.1 の role テストも 8 テスト・20 シナリオが成功した。role の条件・ループ・変数展開は実際の Ansible で評価し、ファイル・サービス操作はテスト用 action plugin に置換して記録する。実機の sysfs や systemd は変更していない。
+
+```bash
+python3 -m unittest tests.test_hyperthreading_guest -v
+ANSIBLE_PLAYBOOK_BINARY=/path/to/ansible-playbook \
+  python3 -m unittest tests.test_hyperthreading_role -v
+```
+
+VM 判定コマンド、既存サービスの無効化、AMD の新規ノード作成は、デプロイ後の実機確認が必要である。
+
+以下は、対応範囲を決定するまでの仕様調査と過去の実機検証記録である。API が Intel 用属性を持つことと、このリポジトリで Intel VM の HT Off をサポートすることは別である。
+
+## 仕様調査と過去の検証範囲
 
 **OCI の仕様と Terraform Provider の実装上、対応する VM Shape では Instance Configuration に HT（SMT）の On / Off を設定し、その Configuration を参照する Instance Pool を作成できる。** リポジトリが固定している OCI Provider **5.37.0 は対応済み**で、この機能のための Provider 更新は不要。
 
-ただし、これは仕様・公開ソースに基づく実現性判断であり、すべての VM Shape での実動作を保証するものではない。実装後のユーザー試験では **VM.Standard.E6.Flex は正常動作、VM.Standard3.Flex は HT=false の変数設定に対して HT On のまま**という結果になった。Intel は、同じ Shape / Image / AD / OCPU で Configuration を使わず作成した VM では SMT Off を確認した。Configuration 経由では Pool の有無にかかわらず On だった。通常作成では VFIO を指定しても SMT Off になり、VFIO 単独の制約では説明できない。Intel の Configuration 作成・保存・展開経路を主な調査対象とする。暗号化・Agent 設定の差などは残るため、原因となる処理は未確定。
+ただし、これは仕様・公開ソースに基づく実現性判断であり、すべての VM Shape での実動作を保証するものではない。実装後のユーザー試験では **VM.Standard.E6.Flex は正常動作、VM.Standard3.Flex は HT=false の変数設定に対して HT On のまま**という結果になった。Intel は、同じ Shape / Image / AD / OCPU で Configuration を使わず作成した VM では SMT Off を確認した。Configuration 経由では Pool の有無にかかわらず On だった。通常作成では VFIO を指定しても SMT Off になり、VFIO 単独の制約では説明できない。Intel の Configuration 作成・保存・展開経路を調査したが、暗号化・Agent 設定の差などは残り、原因となる処理は未確定のまま対応対象から外した。
 
 初期構築用と Autoscaling 用の `instance-pool-platform.tf` に Shape の対応判定を追加し、両方の `instance-pool-configuration.tf` で VM の HT 設定を反映した。本資料には実装前の調査と、実装後のローカル検証・実環境の観測結果を記録する。
 
@@ -19,6 +51,7 @@
 | Python SDK のリクエスト JSON 生成 | AMD / Intel × false / true の 4 ケース成功 |
 | 対象リージョンの Shape 対応状況 | ap-osaka-1 の対象 AD で、E6.Flex / Standard3.Flex ともに SMT の許容値 true / false を確認 |
 | 実環境の HT 状態 | AMD は SMT=false。Intel は Configuration 経由が SMT=true、通常の手動作成は SMT=false / ゲスト 4 CPU・1 thread per core |
+| Intel の OS 側での HT 無効化 | OS では 4 コア各 1 スレッドとなったが、Slurm ジョブが cgroup 作成で失敗。この代替処理は採用しない |
 
 ## OCI と Provider の根拠
 
@@ -33,7 +66,7 @@ VM 起動時にこの値を指定するための設定は、Instance Configurati
 
 ```hcl
 platform_config {
-  type                                = "AMD_VM" # Intel は INTEL_VM
+  type                                = "AMD_VM"
   is_symmetric_multi_threading_enabled = var.hyperthreading
 }
 ```
@@ -55,7 +88,7 @@ Terraform のドキュメントには属性の Applicable 条件から VM 型が
 
 ### Shape ごとの対応判定
 
-型が AMD_VM / INTEL_VM であることに加え、対象 Shape が要求する HT 値を許容していることを確認する必要がある。
+API 上では AMD_VM / INTEL_VM が定義されている。現行の対応範囲では AMD_VM に限定し、対象 Shape が要求する HT 値を許容していることも確認する。
 
 [ShapePlatformConfigOptions](https://docs.oracle.com/en-us/iaas/tools/python/latest/api/core/models/oci.core.models.ShapePlatformConfigOptions.html)と[SMT の許容値](https://docs.oracle.com/en-us/iaas/tools/python/latest/api/core/models/oci.core.models.ShapeSymmetricMultiThreadingEnabledPlatformOptions.html)は、ListShapes の戻り値で確認できる。Provider 5.37.0 の [oci_core_shapes](https://github.com/oracle/terraform-provider-oci/blob/v5.37.0/internal/service/core/core_shapes_data_source.go#L409)も次の情報を公開している。
 
@@ -101,7 +134,7 @@ Instance Pool 側は、すでに該当 Instance Configuration の ID を参照�
 
 既存構成の HT 設定を変更する場合、Provider は Instance Configuration を再作成する。Pool が参照している Configuration は削除できないため、両方の Configuration に `create_before_destroy = true` を指定し、新しい Configuration への切り替え後に古いものを削除する。[Oracle の Instance Pool の制約](https://docs.oracle.com/en-us/iaas/Content/Compute/Concepts/instance-pools.htm)
 
-Slurm はすでにキューの値から `ThreadsPerCore=1 / 2` を設定する。実機では OCPU 数、ゲスト OS のコア数、`slurmd -C` の整合を確認する。また、既存の OS 側 HT 無効化処理との併用も確認する。特に Ubuntu の処理は `/sys/devices/system/cpu/smt/control` に書き込むため、起動時点で HT が無効な環境での挙動を確認する。
+Slurm はすでにキューの値から `ThreadsPerCore=1 / 2` を設定する。実機では OCPU 数、ゲスト OS のコア数、`slurmd -C` の整合を確認する。現行の VM 制御は OCI の起動時設定のみとし、OS 側 HT 無効化処理は併用しない。
 
 ## 実施したローカル検証
 
@@ -120,7 +153,7 @@ OCI Python SDK **2.163.1** を使い、`CreateInstanceConfigurationDetails` 内�
 
 既存のローカル OCI 認証（DEFAULT、ap-tokyo-1）で、テナンシのルート Compartment に対する ListShapes を読み取り専用で試したが、404 `NotAuthorizedOrNotFound` が返った。この結果から対象 Shape の対応可否は判断できない。リソースの作成・変更は行っていない。
 
-## 実装後のオフライン検証
+## 初期実装後のオフライン検証（AMD 限定前の記録）
 
 - Terraform 1.5.7 / OCI Provider 5.37.0 で初期構築用と Autoscaling 用の構成を `validate`。Autoscaling 側は `conf/variables.tpl` に含まれる変数を一時ディレクトリで宣言して検証し、両方成功。
 - Terraform 1.9.8 の mock provider を使い、初期構築 32 ケースと Autoscaling 32 ケースに成功。本番ファイルの Shape 判定、platform_config、作成条件、lifecycle を抽出して検証する。AMD / Intel の On・Off、BIOS / SMT との競合、空・null の対応情報、非対応値の拒否、BM 設定の維持、Arm、初期ノード数 0 を含む。各モジュールで HT=true の mock apply による状態作成と、その状態から HT=false に変更する plan も確認した（合計 62 mock plan / 2 mock apply）。
@@ -248,11 +281,57 @@ TERRAFORM_BINARY=/path/to/terraform \
 
 Enterprise Linux 用の既存 `control_hyperthreading.sh` は `thread_siblings_list` をカンマで分割し、2 番目の CPU だけをオフライン化していた。Linux の CPU リストが `0-1` のような範囲形式の場合、対象 CPU を抽出できず、処理が成功扱いのまま全 CPU がオンラインに残ることをテストで再現した。
 
-範囲・カンマ・混在形式を展開して各コアの先頭 CPU を残し、他の兄弟 CPU をオフラインにするよう修正した。書込み失敗はサービスへエラーとして返す。これは OS 側の利用スレッド数を制御する修正であり、OCI の VM platform 設定を変更するものではない。OS 側で兄弟 CPU をオフラインにした場合、`lscpu` の総 CPU 数は 8 のままでもよい。4 コアの VM ではオンライン CPU 数が 4、各コアのオンラインスレッド数が 1 であることを確認する。ユーザーが再作成した Intel VM の `cpu0/topology/thread_siblings_list` は実際に `0-1` であり、この不具合に該当することを確認した。修正版スクリプトの実機適用後の結果は未確認。
+範囲・カンマ・混在形式を展開して各コアの先頭 CPU を残し、他の兄弟 CPU をオフラインにするよう修正した。書込み失敗はサービスへエラーとして返す。これは OS 側の利用スレッド数を制御する修正であり、OCI の VM platform 設定を変更するものではない。OS 側で兄弟 CPU をオフラインにした場合、`lscpu` の総 CPU 数は 8 のままでもよい。4 コアの VM ではオンライン CPU 数が 4、各コアのオンラインスレッド数が 1 であることを確認する。ユーザーが再作成した Intel VM の `cpu0/topology/thread_siblings_list` は実際に `0-1` であり、この不具合に該当することを確認した。
+
+### 修正版スクリプトの Intel VM 実機確認（2026-09-17）
+
+以下は VM を OS 側 HT 制御の対象から外す前の記録であり、現在の運用手順ではない。
+
+ユーザーが修正版をデプロイし、Intel の計算ノードで CPU 状態とサービスログを採取した。ゲストの CPU モデルは Intel Xeon Gold 6354、4 コア・総論理 CPU 数 8 だった。
+
+| 確認項目 | 観測結果 |
+| --- | --- |
+| オンライン CPU | `0,2,4,6` |
+| オフライン CPU | `1,3,5,7` |
+| `lscpu` の Thread(s) per core | `1` |
+| `lscpu -e=CPU,CORE,SOCKET,ONLINE` | オンライン CPU 0 / 2 / 4 / 6 がそれぞれコア 0 / 1 / 2 / 3 に対応 |
+| `disable-hyperthreading.service` | enabled、`active (exited)`、`status=0/SUCCESS` |
+| 今回の起動ログ | 12:16:24 GMT に `disabling cpu1 cpu3 cpu5 cpu7` と処理後のオンライン / オフライン一覧を記録 |
+| `slurmd -C` | `CPUs=4 Boards=1 SocketsPerBoard=1 CoresPerSocket=4 ThreadsPerCore=1` |
+| Slurm コントローラのノード情報 | `CPUTot=4 CPUEfctv=4 CoresPerSocket=4 ThreadsPerCore=1`、`State=MIXED`、`CPUAlloc=1` |
+| Slurm バージョン / パーティション | `23.02.5` / `compute`。`sinfo` も `mix` / 4 CPU と表示 |
+
+この結果により、修正版サービスが実機で兄弟 CPU をオフライン化し、4 コアすべてを各 1 スレッドで利用できる状態にしたことを確認した。これはゲスト OS 側の処理の確認であり、今回のノードの OCI API の SMT 設定値を確認したものではない。
+
+Slurm の実機検出と登録情報は 4 コア・1 スレッドで一致し、CPU 構成不一致によるノード登録失敗は提示された情報には見られない。`MIXED` は 1 CPU が割り当て済みである状態と整合する。今回の初期構築では、HT サービスの処理終了が 12:16:24 GMT、SlurmdStartTime が 12:16:56 であり、HT 処理の後に slurmd が起動したことも確認できる。
+
+ただし、今回のノードの Slurm Features は `VM.Optimized3.Flex,intel-default` で、前日の調査対象 `VM.Standard3.Flex` とは異なる。Features は Slurm 側の設定情報であるため、OCI メタデータまたは API で実際の Shape を確認するまで、Standard3.Flex での修正版実機検証と同一視しない。
+
+続く `srun --cpu-bind=verbose,cores` の確認は、3 タスク、およびノードが IDLE になった後の 4 タスクの両方で `Nodes ... are still not ready` / `Something is wrong with the boot of the nodes.` と終了し、タスクの `Cpus_allowed_list` は取得できなかった。ジョブの CPU 固定は未合格であり、原因は調査中。Slurm 23.02.5 の [`_wait_nodes_ready`](https://github.com/SchedMD/slurm/blob/slurm-23-02-5-1/src/srun/allocate.c#L230) はジョブ・ノード・Prolog の準備状態を確認しており、このメッセージだけで OCI VM の起動失敗や CPU 固定失敗を断定しない。また、この待機ループ自体に `--immediate=10` による 10 秒の打切り処理はないため、待ち時間不足と決め付けず、コントローラと slurmd のログで確認する。
+
+追加の slurmd ログで、失敗は extern step の `task_g_pre_setuid` にあると分かった。`/sys/fs/cgroup/cpuset/slurm/uid_1000/cpuset.cpus` への書込みが `Invalid argument` となり、ジョブ用の cgroup 作成に失敗している。コントローラの requeue / cancel はその後に発生しており、ノードの未起動が原因と確認されたわけではない。一方、1 タスクのジョブでは CPU mask `0x1` でタスク起動まで進んだログもある。
+
+ユーザーが採取した root / slurm / uid_1000 の `cpuset.cpus` と `cpuset.effective_cpus` は、すべて `0,2,4,6` で一致し、各 `cpuset.mems` も `0` だった。採取時点で親子の制限に不整合はない。ログの「external software に変更された可能性」は [`task_cgroup_cpuset.c`](https://github.com/SchedMD/slurm/blob/slurm-23-02-5-1/src/plugins/task/cgroup/task_cgroup_cpuset.c#L106) が UID cgroup への書込み失敗時に出す汎用メッセージであり、外部ソフトの変更を検出した証拠ではない。
+
+有力な原因候補は、疎な OS CPU 番号に対する Slurm の変換である。23.02.5 の [`xcpuinfo_hwloc_topo_get`](https://github.com/SchedMD/slurm/blob/slurm-23-02-5-1/src/slurmd/common/xcpuinfo.c#L517) は PU 数で対応表を確保し、OS CPU 番号がその数以上なら変換をスキップする。4 PU / OS 番号 `0,2,4,6` をこの処理に与えると、初期値が残ることでオフライン CPU を含む対応表になり得る。さらに [`xcpuinfo_abs_to_mac`](https://github.com/SchedMD/slurm/blob/slurm-23-02-5-1/src/slurmd/common/xcpuinfo.c#L1092) も対応表のサイズを OS CPU 番号の上限として扱う。これはソースから確認した問題候補であり、当該ノードで Slurm が作った変換表・書込み値の実測とは区別する。
+
+当該ノードでは `/var/spool/slurmd/hwloc_topo_whole.xml` が見つからなかった。リポジトリは Slurm のビルド済み RPM を導入しており、別途 PMIx 用に hwloc をインストールしていても Slurm 自身への組込みを保証しない。hwloc なしの [`/proc/cpuinfo` 経路](https://github.com/SchedMD/slurm/blob/slurm-23-02-5-1/src/slurmd/common/xcpuinfo.c#L610) にも疎な番号への問題がある。`_compute_block_map` は CPU 情報配列の添字を並べ替えて対応表にし、格納された実際の `cpuid` を出力値へ変換しない。CPU 番号 `0,2,4,6`、コア番号 `0,1,2,3` の入力例では、対応表が `0,1,2,3` のままとなる。
+
+リポジトリの配布元から `slurm-slurmd-23.02.5-1.el8.x86_64.rpm` を取得し、インストールせず内容を解析した。この配布 RPM の `slurmd` と `slurmstepd` は hwloc への RPM / 動的ライブラリ依存を持たず、`xcpuinfo_hwloc_topo_load` が 0 を返すだけの実装だった。これはソースの hwloc なしの条件分岐と一致する。従って、この配布物では XML ファイルが作られないことは正常である。抽出した `slurmd` の SHA256 は `8e82e3a52819ba8e8e64d668af49fe9e1e69286c8367b761430f4ce4f145050a`。実機にあるバイナリとの同一性は別途確認する。
+
+ユーザーによる実機確認でも、`SlurmdSpoolDir=/var/spool/slurmd`、`ldd /usr/sbin/slurmd` に hwloc のリンクなし、`strings` では `/proc/cpuinfo` のみ該当し、hwloc の XML パス・初期化文字列なしという結果だった。これは解析した配布 RPM の hwloc なしの構成と整合する（実機バイナリのハッシュ比較は未実施）。従って、今回まず追跡すべき経路は hwloc ありの変換ではなく `/proc/cpuinfo` の変換である。
+
+この経路を上記の CPU 構成で計算すると、4 コアのジョブに対する変換結果は `0-3` となり、親 cgroup の `0,2,4,6` と連結した UID 用の書込み候補は `0-3,0,2,4,6`（11 バイト）になる。この値は親に含まれない CPU 1・3 を含み、観測された cpuset 書込み拒否を説明できる。CPU 0 のみのジョブが起動したこととも整合する。ただし、これはソースと入力に基づく再現計算であり、実機の書込み値をトレースして採取したものではない。11 バイトという長さだけを根拠に原因を確定しない。
+
+なお `slurmd -C -vvvvv` では変換表を取得できない。23.02.5 の `-C` はコマンドライン処理中に構成を表示して終了し、後段の詳細ログ設定が適用されない。これは診断方法の制約であり、変換表の正常性を示す結果ではない。
+
+**Intel VM で OS 側の HT 無効化に成功しても、現状の Slurm ジョブ実行は失敗している。OS 側の無効化だけを完成した回避策として扱わない。** `--cpu-bind=none` はこの cgroup 作成処理を迂回せず、`ConstrainCores=no` による CPU 分離の無効化も恒久対策にはしない。起動順序を整えるだけで今回の CPU 番号変換の問題も解決すると断定しない。
+
+この経路には CPU 固定を伴うジョブ、MPI / OpenMP、再起動順序、起動済み oneshot サービスへの更新再適用などの課題が残った。ユーザーの方針により Intel VM の HT Off と VM の OS 側制御を対象から外し、Slurm の独自修正・設定緩和を進めない。
 
 ## 実環境での合格条件
 
-対象 Compartment、AD、Subnet、対応 Image とそれらを利用できる認証を定め、AMD / Intel の対象 Shape ごとに次を確認する。
+対象 Compartment、AD、Subnet、対応 Image とそれらを利用できる認証を定め、対応する AMD VM Shape ごとに次を確認する。Intel VM は HT Off の起動試験を行わず、false が作成前に拒否されることを確認する。
 
 1. ListShapes で platform type と要求する HT 値の許容を確認する。
 2. HT=false を指定した Instance Configuration を作成する。plan と送信内容の `instance_details.launch_details.platform_config` に正しい VM 型と false が含まれることを確認する。上記の実測では GET が SMT 項目を返さないため、取得結果だけで保存値を判定しない。

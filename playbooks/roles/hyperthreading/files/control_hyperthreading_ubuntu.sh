@@ -5,6 +5,18 @@ then
         exit 1
 fi
 
+# The guard also protects ExecStop from previously installed VM service units.
+virtualization=$(systemd-detect-virt --vm)
+virtualization_status=$?
+if [ "$virtualization_status" -eq 0 ] && [ -n "$virtualization" ] && [ "$virtualization" != none ]; then
+        echo "$0: VM detected ($virtualization); guest HT control is disabled"
+        exit 0
+fi
+if [ "$virtualization_status" -ne 1 ] || [ "$virtualization" != none ]; then
+        echo "$0: cannot confirm bare metal; refusing to change CPU state" >&2
+        exit 1
+fi
+
 set_ht() {
         local current_state
         if [ ! -e /sys/devices/system/cpu/smt/control ]; then

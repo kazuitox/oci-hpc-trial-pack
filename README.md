@@ -124,7 +124,7 @@ conf/queues.conf.example
 - `max_cluster_count`: 同時に保持できる最大クラスター数。
 - `cluster_network` / `compute_cluster`: 作成方式を指定します。
 - `ad`: 複数 AD を空白区切りで指定すると、作成失敗時に別 AD を試行します。
-- `hyperthreading`: 対応する AMD / Intel VM の Instance Pool では、`false` で HT Off、`true` で HT On を起動時に指定します。VM にはキューの値を使用し、BM 向けの `BIOS` / `SMT` 設定とは独立して制御します。
+- `hyperthreading`: 対応する **AMD VM** の Instance Pool では、`false` で HT Off、`true` で HT On を OCI 起動時に指定します。Intel VM の HT Off は対象外で、`false` を指定すると作成前にエラーになります。VM にはキューの値を使用し、BM 向けの `BIOS` / `SMT` 設定とは独立して制御します。
 - `use_local_block_volume`: 各 Compute node 専用の一時 Block Volume をアタッチします。
 - `local_block_volume_size`: ノードごとの Block Volume サイズ（50 GB 以上の整数）です。
 - `local_block_volume_performance`: `0.  Lower performance`、`10. Balanced performance`、`20. High Performance` のいずれかを指定します。
@@ -132,9 +132,11 @@ conf/queues.conf.example
 
 このノード専用 Block Volume は `use_scratch_nfs` で構成するクラスター内共有 NFS とは独立しています。XFS（Oracle Linux）または ext4（Ubuntu/Debian）で初期化し、ノード終了時に自動削除します。稼働中ノードの設定は後から付け替えず、`queues.conf` の変更後に新規作成されるクラスター／ノードから適用されます。初期 Permanent node にはスタック作成時の同名設定が適用されます。
 
-VM の HT 設定は、対象 AD の Shape が返す対応情報を確認して適用します。HT Off を指定した x86 VM で対応を確認できない場合は作成を停止します。HT On で対応情報がない従来の VM は Shape の既定設定を維持し、Arm VM には SMT 設定を送信しません。BM の既存の BIOS / SMT 制御と OS 側の HT 制御は維持します。
+VM の HT 設定は、対象 AD の Shape が返す対応情報を確認し、`AMD_VM` かつ要求値を許容する場合だけ適用します。Intel VM の `hyperthreading=true` は HT 用 platform_config を送信せず、Shape の既定設定を維持します。HT On で対応情報がない従来の VM も既定設定を維持し、Arm VM には SMT 設定を送信しません。
 
-2026-09-16 の実機試験では、`VM.Standard.E6.Flex` の HT Off は確認できましたが、`VM.Standard3.Flex` は `hyperthreading=false` と修正版テンプレートを使用しても OCI 側が HT On のままとなる事象を調査中です。同じ Instance Configuration から Pool を経由せずに単体起動した VM でも、HT On を確認しました。Configuration を使わない手動作成では、PARAVIRTUALIZED / VFIO の両方で HT Off を確認しました。VFIO 単独の制約では説明できず、Configuration 経由で指定値が反映されない段階を調査しています。Enterprise Linux の OS 側処理は、Intel VM で観測された `0-1` 形式の CPU リストにも対応しています。この OS 側の制御はオンラインスレッド数を減らしますが、OCI 上の HT 設定は変更しません。
+**OS 側の HT 制御はベアメタルに限定します。** AMD / Intel を含む VM では CPU をオフライン化せず、HT サービスも新規導入しません。既存 VM にこのリポジトリの HT サービスが残っている場合は、制御スクリプトに VM 判定を追加し、自動起動だけを無効化します。サービスの停止・CPU の再オンライン化は行いません。すでに OS 側で CPU がオフライン化された Intel VM は、この更新だけでは元に戻らないため、ジョブ終了後に `hyperthreading=true` の設定で再作成してください。BM の既存の BIOS / SMT 制御と OS 側の HT 制御は維持します。
+
+2026-09-16 の実機試験では `VM.Standard.E6.Flex` の OCI 側 HT Off を確認しました。Intel VM は Configuration 経由の指定値が反映されない事象があり、OS 側の代替処理でも Slurm の CPU 番号変換に問題が生じたため、今回の HT Off 対応対象から外しました。Slurm のパッチや CPU 隔離設定の変更は導入しません。
 
 OCI の起動時 HT 設定の変更は、新規作成する VM が対象です。Instance Configuration を変更しても、既存 VM の OCI 上の HT 設定には自動反映されません。初期 Permanent node はスタックの `hyperthreading` を使用します。既存環境では、コントローラの `/opt/oci-hpc/autoscaling/tf_init` と関連する playbook を更新してから、新しいクラスターを作成してください。仕様の根拠と実機での確認手順は[VM の HT 制御の調査資料](docs/vm-instance-pool-hyperthreading-feasibility.md)に記載しています。
 
@@ -179,6 +181,8 @@ sleep 1000
 デフォルトでは、ジョブがインスタンスタイプを指定しない場合、キュー内で `default: true` のインスタンスタイプが使われます。デフォルト以外のキューへ投入する場合は、SBATCH ファイルに `#SBATCH --partition <queue_name>` を追加するか、コマンドラインで `sbatch -p <queue_name> job.sh` を指定します。
 
 Ubuntu 22.04 かつ Hyperthreading を無効化した環境で `error: task_g_set_affinity: Invalid argument` が出る場合は、`--cpu-bind=none` または `--cpu-bind=sockets` を試してください。
+
+Intel VM を HT Off の代替として OS 側で制御する構成は対象外です。判断の根拠となった Slurm の cgroup エラーは、[過去の検証記録](docs/vm-instance-pool-hyperthreading-feasibility.md#修正版スクリプトの-intel-vm-実機確認2026-09-17)を参照してください。
 
 ## ディレクトリとログ
 

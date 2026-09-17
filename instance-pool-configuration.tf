@@ -132,7 +132,7 @@ resource "oci_core_instance_configuration" "instance_pool_configuration" {
 
     precondition {
       condition     = local.instance_pool_vm_hyperthreading_valid
-      error_message = "Shape ${var.instance_pool_shape} in ${var.ad} does not advertise support for hyperthreading=${var.hyperthreading}. Choose a VM shape with the requested SMT capability; HT Off cannot fall back to the shape default."
+      error_message = "Shape ${var.instance_pool_shape} in ${var.ad} cannot use hyperthreading=${var.hyperthreading}. VM HT control is supported only on AMD VM shapes with the requested SMT capability. Intel VM HT Off is unsupported; HT Off cannot fall back to the shape default."
     }
   }
 }

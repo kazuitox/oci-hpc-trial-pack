@@ -23,16 +23,19 @@ locals {
   )
   instance_pool_vm_smt_options_known = try(length(local.instance_pool_vm_smt_allowed_values) > 0, false)
   instance_pool_vm_smt_supported = (
-    contains(["AMD_VM", "INTEL_VM"], local.instance_pool_vm_platform_type) &&
+    local.instance_pool_vm_platform_type == "AMD_VM" &&
     try(contains(local.instance_pool_vm_smt_allowed_values, tobool(var.hyperthreading)), false)
   )
   instance_pool_vm_platform_config = local.instance_pool_is_vm && !local.instance_pool_is_arm && local.instance_pool_vm_smt_supported ? [local.instance_pool_vm_platform_type] : []
 
-  # Older VM shapes may omit SMT capabilities. Keep their default for HT On,
-  # but never silently launch an HT Off request with the default (HT On).
+  # VM HT control is supported only on AMD. Intel HT On keeps the shape default;
+  # Intel HT Off must fail even when OCI advertises that capability.
+  # Older VM shapes without SMT capabilities also keep their default for HT On.
   instance_pool_vm_hyperthreading_valid = (
     !local.instance_pool_is_vm || local.instance_pool_is_arm ||
     length(local.instance_pool_vm_platform_config) > 0 ||
-    (tobool(var.hyperthreading) && !local.instance_pool_vm_smt_options_known)
+    (tobool(var.hyperthreading) && (
+      local.instance_pool_vm_platform_type == "INTEL_VM" || !local.instance_pool_vm_smt_options_known
+    ))
   )
 }

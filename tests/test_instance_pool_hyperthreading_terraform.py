@@ -51,9 +51,9 @@ def assertions(conditions):
     )
 
 
-def shape_response(platform_type="AMD_VM", allowed=(False, True)):
+def shape_response(platform_type="AMD_VM", allowed=(False, True), shape="VM.Standard.E5.Flex"):
     return [{
-        "name": "VM.Standard.E5.Flex",
+        "name": shape,
         "platform_config_options": [{
             "type": platform_type,
             "symmetric_multi_threading_options": [{"allowed_values": allowed}],
@@ -98,11 +98,23 @@ def scenarios(autoscaling):
             body += assertions(conditions + list(extra))
         cases.append('run "%s" {\n%s\n}' % (name, body))
 
-    for platform_type in ("AMD_VM", "INTEL_VM"):
+    for ht in (False, True):
+        add("amd_vm_ht_%s" % str(ht).lower(),
+            {"hyperthreading": ht, "SMT": not ht, "BIOS": True},
+            shape_response(), "AMD_VM", ht)
+    for shape in ("VM.Standard3.Flex", "VM.Optimized3.Flex"):
         for ht in (False, True):
-            add("%s_ht_%s" % (platform_type.lower(), str(ht).lower()),
-                {"hyperthreading": ht, "SMT": not ht, "BIOS": True},
-                shape_response(platform_type), platform_type, ht)
+            add("intel_%s_ht_%s" % (shape.split(".")[1].lower(), str(ht).lower()),
+                {"instance_pool_shape": shape, "hyperthreading": ht, "BIOS": True,
+                 "SMT": not ht}, shape_response("INTEL_VM", shape=shape), fails=not ht)
+    for label, allowed in (("missing", []), ("only_off", [False]), ("only_on", [True])):
+        for ht in (False, True):
+            add("intel_%s_capability_ht_%s" % (label, str(ht).lower()),
+                {"instance_pool_shape": "VM.Standard3.Flex", "hyperthreading": ht},
+                shape_response("INTEL_VM", allowed, "VM.Standard3.Flex"), fails=not ht)
+    add("intel_string_off_rejected",
+        {"instance_pool_shape": "VM.Standard3.Flex", "hyperthreading": "false"},
+        shape_response("INTEL_VM", shape="VM.Standard3.Flex"), fails=True)
     add("bios_disabled_still_controls_vm", {"BIOS": False}, platform_type="AMD_VM", ht=False)
     add("string_queue_value_is_boolean", {"hyperthreading": "false"}, platform_type="AMD_VM", ht=False)
 

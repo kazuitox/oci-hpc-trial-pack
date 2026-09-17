@@ -17,7 +17,8 @@ UBUNTU_SCRIPT = (
 
 
 class EnterpriseLinuxHyperthreadingTests(unittest.TestCase):
-    def run_control(self, siblings, action, offline_cpus=(), blocked_cpu=None):
+    def run_control(self, siblings, action, offline_cpus=(), blocked_cpu=None,
+                    virtualization="none", detection_status=1):
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)
             cpu_root = temporary_path / "cpu"
@@ -42,6 +43,10 @@ class EnterpriseLinuxHyperthreadingTests(unittest.TestCase):
             commands = {
                 "id": "printf '0\\n'\n",
                 "lscpu": "printf 'On-line CPU(s) list: fixture\\n'\n",
+                "systemd-detect-virt": (
+                    '[ "$1" = --vm ] || exit 99\n'
+                    f"printf '%s\\n' '{virtualization}'\nexit {detection_status}\n"
+                ),
             }
             for name, body in commands.items():
                 executable = commands_path / name
@@ -110,6 +115,37 @@ class EnterpriseLinuxHyperthreadingTests(unittest.TestCase):
         self.assertEqual(result.stderr, "")
         self.assertEqual(online_states, {1: "1", 2: "1", 3: "1"})
 
+    def test_vm_never_changes_online_cpu_state(self):
+        cases = [
+            (["0-1", "0-1", "2-3", "2-3"], set()),
+            (["0-1", "0-1", "2-3", "2-3"], {1, 3}),
+            (["0", "1", "2", "3"], set()),
+        ]
+        for siblings, offline_cpus in cases:
+            for action in ("off", "0", "on", "1"):
+                with self.subTest(siblings=siblings, offline=offline_cpus, action=action):
+                    result, states = self.run_control(
+                        siblings, action, offline_cpus=offline_cpus,
+                        virtualization="kvm", detection_status=0,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("VM detected", result.stdout)
+                    self.assertEqual(states, {
+                        cpu: "0" if cpu in offline_cpus else "1"
+                        for cpu in range(1, len(siblings))
+                    })
+
+    def test_uncertain_machine_type_never_changes_cpu_state(self):
+        for virtualization, status in (("", 1), ("", 127), ("none", 0)):
+            for action in ("off", "on"):
+                with self.subTest(virtualization=virtualization, status=status, action=action):
+                    result, states = self.run_control(
+                        ["0-1", "0-1", "2-3", "2-3"], action, offline_cpus={3},
+                        virtualization=virtualization, detection_status=status,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(states, {1: "1", 2: "1", 3: "0"})
+
     def test_enabling_restores_offline_cpus_without_cpu_zero_online_file(self):
         for action in ["on", "1"]:
             with self.subTest(action=action):
@@ -138,7 +174,8 @@ class EnterpriseLinuxHyperthreadingTests(unittest.TestCase):
 
 
 class UbuntuHyperthreadingTests(unittest.TestCase):
-    def run_control(self, state, action, write_failure=False):
+    def run_control(self, state, action, write_failure=False,
+                    virtualization="none", detection_status=1):
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)
             writes = temporary_path / "writes"
@@ -156,6 +193,10 @@ class UbuntuHyperthreadingTests(unittest.TestCase):
             )
             commands = {
                 "id": "printf '0\\n'\n",
+                "systemd-detect-virt": (
+                    '[ "$1" = --vm ] || exit 99\n'
+                    f"printf '%s\\n' '{virtualization}'\nexit {detection_status}\n"
+                ),
                 # Intercept the complete privileged write, never touching sysfs.
                 "sudo": (
                     '[ "$1" = tee ] || exit 99\n'
@@ -217,12 +258,34 @@ class UbuntuHyperthreadingTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(writes, [])
 
-    def test_existing_guest_ht_toggle_remains_available(self):
+    def test_bare_metal_ht_toggle_remains_available(self):
         for state, action in [("on", "off"), ("off", "on")]:
             with self.subTest(state=state, action=action):
                 result, writes = self.run_control(state, action)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(writes, [action])
+
+    def test_vm_never_changes_smt_state(self):
+        for state in ("on", "off", "notsupported", "forceoff", None):
+            for action in ("on", "off", "0", "1"):
+                with self.subTest(state=state, action=action):
+                    result, writes = self.run_control(
+                        state, action, virtualization="kvm", detection_status=0,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("VM detected", result.stdout)
+                    self.assertEqual(writes, [])
+
+    def test_uncertain_machine_type_never_changes_smt_state(self):
+        for virtualization, status in (("", 1), ("", 127), ("none", 0)):
+            for state, action in (("on", "off"), ("off", "on")):
+                with self.subTest(virtualization=virtualization, status=status, action=action):
+                    result, writes = self.run_control(
+                        state, action, virtualization=virtualization,
+                        detection_status=status,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(writes, [])
 
     def test_failed_write_is_reported_to_the_service(self):
         result, writes = self.run_control("on", "off", write_failure=True)
