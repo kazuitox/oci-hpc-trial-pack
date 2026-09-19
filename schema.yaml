@@ -1411,7 +1411,7 @@ variables:
     type: boolean
     title: Hyperthreading を有効化
     default: false
-    description: チェックを外すと SMT が無効になります
+    description: チェックを外すと SMT が無効になります。対応する VM の Instance Pool では起動時に適用されます。変更は新規作成ノードが対象です。
   boot_volume_size:
     type: integer
     required: true
@@ -1615,7 +1615,7 @@ variables:
       - not:
         - ${import_compute_image_from_object_storage}
   BIOS:
-    title: BIOS オプションを変更
+    title: BM の BIOS オプションを変更
     description: '警告: 単一インスタンスで変更をテストしていない場合は変更しないでください。エラーは "Shape does not support the provided platform configuration" になります。'
     type: boolean
     default: false
@@ -1626,7 +1626,7 @@ variables:
     default: false
     visible: ${BIOS}
   SMT:
-    title: SMT を有効化
+    title: BM の SMT を有効化
     type: boolean
     default: true
     visible: ${BIOS}

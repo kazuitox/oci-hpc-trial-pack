@@ -1,0 +1,33 @@
+---
+# Existing oneshot units have ExecStop=... on. Do not stop them or change
+# currently online CPUs while retiring this role from a running VM.
+- name: Find previously installed guest hyperthreading scripts
+  ansible.builtin.stat:
+    path: "/opt/oci-hpc/sbin/{{ item }}"
+  loop:
+    - control_hyperthreading.sh
+    - control_hyperthreading_ubuntu.sh
+  register: hyperthreading_vm_scripts
+
+- name: Protect existing scripts from changing VM CPU state
+  ansible.builtin.copy:
+    src: "{{ item.item }}"
+    dest: "/opt/oci-hpc/sbin/{{ item.item }}"
+    mode: '0755'
+  loop: "{{ hyperthreading_vm_scripts.results }}"
+  when: item.stat.exists
+
+- name: Find previously installed guest hyperthreading units
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ item }}"
+  loop:
+    - disable-hyperthreading.service
+    - disable-hyperthreading_ubuntu.service
+  register: hyperthreading_vm_units
+
+- name: Disable future guest hyperthreading service starts without stopping it
+  ansible.builtin.systemd:
+    name: "{{ item.item }}"
+    enabled: false
+  loop: "{{ hyperthreading_vm_units.results }}"
+  when: item.stat.exists

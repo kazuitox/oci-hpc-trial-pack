@@ -270,7 +270,6 @@
   tasks: 
     - include_role: 
         name: hyperthreading
-      when: not hyperthreading|default(false)|bool
     - include_role: 
         name: nccl-conf
       when: cluster_network|bool

@@ -90,7 +90,15 @@ resource "oci_core_instance_configuration" "instance_pool_configuration" {
           }
       }
       dynamic "platform_config" {
-        for_each = var.BIOS ? range(1) : []
+        for_each = local.instance_pool_vm_platform_config
+        content {
+          type                                = platform_config.value
+          is_symmetric_multi_threading_enabled = tobool(var.hyperthreading)
+        }
+      }
+
+      dynamic "platform_config" {
+        for_each = var.BIOS && !local.instance_pool_is_vm ? range(1) : []
         content {
           type = local.platform_type
           are_virtual_instructions_enabled = var.virt_instr
@@ -113,4 +121,14 @@ resource "oci_core_instance_configuration" "instance_pool_configuration" {
   }
 
   source = "NONE"
+
+  lifecycle {
+    # A configuration still referenced by a pool cannot be deleted.
+    create_before_destroy = true
+
+    precondition {
+      condition     = local.instance_pool_vm_hyperthreading_valid
+      error_message = "Shape ${var.instance_pool_shape} in ${var.ad} cannot use hyperthreading=${var.hyperthreading}. VM HT control is supported only on AMD VM shapes with the requested SMT capability. Intel VM HT Off is unsupported; HT Off cannot fall back to the shape default."
+    }
+  }
 }

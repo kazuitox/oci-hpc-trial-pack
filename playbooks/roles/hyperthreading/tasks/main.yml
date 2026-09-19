@@ -1,5 +1,32 @@
-- include_tasks: el.yml
-  when: ansible_os_family == 'RedHat'
+---
+# Detect the running machine, rather than a controller-wide shape setting.
+- name: Detect whether guest hyperthreading control must be skipped
+  ansible.builtin.command:
+    argv: [systemd-detect-virt, --vm]
+  register: hyperthreading_virtualization
+  changed_when: false
+  check_mode: false
+  failed_when: >-
+    (hyperthreading_virtualization.rc not in [0, 1]) or
+    (hyperthreading_virtualization.rc == 1 and
+     hyperthreading_virtualization.stdout | trim != 'none') or
+    (hyperthreading_virtualization.rc == 0 and
+     hyperthreading_virtualization.stdout | trim in ['', 'none'])
 
-- include_tasks: ubuntu.yml
-  when: ansible_distribution == 'Ubuntu'
+- name: Retire guest hyperthreading controls on VMs
+  ansible.builtin.include_tasks: vm.yml
+  when: hyperthreading_virtualization.rc == 0
+
+- name: Configure bare metal hyperthreading on Enterprise Linux
+  ansible.builtin.include_tasks: el.yml
+  when:
+    - hyperthreading_virtualization.rc == 1
+    - not hyperthreading | default(true) | bool
+    - ansible_os_family == 'RedHat'
+
+- name: Configure bare metal hyperthreading on Ubuntu
+  ansible.builtin.include_tasks: ubuntu.yml
+  when:
+    - hyperthreading_virtualization.rc == 1
+    - not hyperthreading | default(true) | bool
+    - ansible_distribution == 'Ubuntu'
