@@ -219,12 +219,12 @@ Autoscaling と同じ仕組みを使って、クラスターを手動で作成�
 
 `instance_keyword` は `queues.conf` の値と一致させてください。
 
-Autoscaling の Instance Pool と Cluster Network では、Ansible の構成完了後に各ノードから
+Autoscaling の Instance Pool、Cluster Network、Compute Cluster では、Ansible の構成完了後に各ノードから
 実際の OS ホスト名を取得し、その値へ OCI インスタンス名と Primary VNIC の表示名を自動同期
 します。名前を事前計算するのではなく、Ansible 適用後のホスト名を正として扱います。VNIC の
 `hostname_label` は VCN 内部 DNS 用の別属性であり、変更しません。Secondary VNIC と
-Compute Cluster は対象外です。既存クラスターを移行する場合は、次の再構成を一度実行して
-ください。
+VNIC attachment 固有の表示名も対象外です。既存クラスターを移行する場合は、次の再構成を
+一度実行してください。
 
 ここでいう VNIC 名は Networking サービス上の VNIC リソースの表示名です。VNIC attachment
 は公開 API に更新操作がないため、attachment 固有の表示名は同期対象に含みません。
@@ -238,10 +238,17 @@ IAM Policy を手動管理している場合は、実行主体に Primary VNIC �
 
 同期途中で失敗した場合、次回の `add`、`remove`、`remove_unreachable`、`reconfigure`
 は未完了の再構成と名前同期だけを再開して終了します。同じ台数変更を続けて行う場合は、完了を
-確認してからコマンドをもう一度実行してください。既存の Instance Pool と Cluster Network の
+確認してからコマンドをもう一度実行してください。既存の Instance Pool、Cluster Network、
+Compute Cluster の
 旧 OCI 名 DNS レコードは、この再構成時に Terraform から安全に引き継がれます。
-既存 Cluster Network の初回移行は Terraform の state lock 外で行う必要があるため、
+既存 Cluster Network と Compute Cluster の初回移行は Terraform の state lock 外で行う必要があるため、
 `terraform apply` を直接再実行せず、上記の `resize.sh ... reconfigure` を使用してください。
+
+Compute Cluster の `add` で `--no_reconfigure` を指定した場合、追加ノードは一時 OCI 名のままになり、
+名前同期と canonical DNS 作成も保留されます。後から上記の `reconfigure` を実行してください。また、
+通常の `remove` / `remove_unreachable` で安全に削除できるのは、`resize.sh add` が追加した Terraform
+state 外のノードだけです。Terraform が管理する初期ノードを減らす場合は、クラスター単位で削除して
+必要な台数で再作成してください。
 
 削除:
 

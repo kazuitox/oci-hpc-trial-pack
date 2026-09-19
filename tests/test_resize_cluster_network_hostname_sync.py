@@ -334,7 +334,7 @@ class ClusterNetworkTerraformIdentityTests(unittest.TestCase):
                     inventory_path
                 ),
                 lambda: self.namespace[
-                    "synchronize_autoscaling_managed_pool_names"
+                    "synchronize_autoscaling_compute_names"
                 ](
                     COMPARTMENT_ID,
                     inventory_path,
@@ -482,11 +482,13 @@ class ClusterNetworkTerraformIdentityTests(unittest.TestCase):
             write_cluster_network_state(directory)
             inventory_path = write_cluster_network_inventory(directory)
             result = self.namespace[
-                "synchronize_autoscaling_managed_pool_names"
+                "synchronize_autoscaling_compute_names"
             ](
                 COMPARTMENT_ID,
                 inventory_path,
                 CLUSTER_NAME,
+                expected_instance_pool_id=INSTANCE_POOL_ID,
+                expected_cluster_network_id=CLUSTER_NETWORK_ID,
             )
 
         self.assertEqual(result, ([], {}))
@@ -763,11 +765,6 @@ class ClusterNetworkDnsMigrationSafetyTests(unittest.TestCase):
         "var.dns_entries && (var.cluster_network || var.compute_cluster) ? "
         "toset([for v in range(var.node_count) : tostring(v)]) : []"
     )
-    V2_DNS_EXPRESSION = (
-        "var.dns_entries && var.compute_cluster ? "
-        "toset([for v in range(var.node_count) : tostring(v)]) : []"
-    )
-
     def setUp(self):
         self.namespace = load_resize_functions()
 
@@ -859,8 +856,12 @@ class ClusterNetworkDnsMigrationSafetyTests(unittest.TestCase):
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
         def write_network(path, contents):
-            self.assertIn(self.V2_DNS_EXPRESSION, contents)
+            self.assertRegex(
+                contents,
+                r"(?m)^\s*for_each\s*=\s*toset\(\[\]\)\s*$",
+            )
             self.assertNotIn(self.LEGACY_CN_DNS_EXPRESSION, contents)
+            self.assertNotIn("var.compute_cluster ?", contents)
             events.append("network-v2")
 
         self.namespace["write_instance_pool_name_dns_ownership"] = write_ledger
@@ -946,9 +947,18 @@ class ClusterNetworkDnsMigrationSafetyTests(unittest.TestCase):
             ownership = self.namespace[
                 "load_instance_pool_name_dns_ownership"
             ](inventory_path)
+            with open(
+                os.path.join(directory, "network.tf"),
+                encoding="utf-8",
+            ) as network_file:
+                network_after_failure = network_file.read()
 
-        self.assertEqual(commands, [["terraform", "state", "list"]])
-        self.assertIs(ownership["terraform_state_released"], False)
+        # The checked-in state JSON is sufficient to discover that this
+        # legacy address still needs ownership transfer.  Refuse the lock
+        # before spawning any Terraform subprocess.
+        self.assertEqual(commands, [])
+        self.assertIsNone(ownership)
+        self.assertIn(self.LEGACY_CN_DNS_EXPRESSION, network_after_failure)
 
     def test_cn_migration_ledgers_every_state_rrset_including_stale_members(self):
         self.configure_migration_dns()
@@ -2228,13 +2238,17 @@ class ClusterNetworkWiringTests(unittest.TestCase):
         ) as source_file:
             return source_file.read()
 
-    def test_terraform_oci_name_dns_is_excluded_for_both_managed_pool_types(self):
+    def test_terraform_oci_name_dns_is_python_owned_for_all_compute_types(self):
         network = self.read("autoscaling", "tf_init", "network.tf")
         resource = network.split(
             'resource "oci_dns_rrset" "rrset-cluster-network-OCI"',
             1,
         )[1].split('\nresource "', 1)[0]
-        self.assertIn("var.dns_entries && var.compute_cluster ?", resource)
+        self.assertRegex(
+            resource,
+            r"(?m)^\s*for_each\s*=\s*toset\(\[\]\)\s*$",
+        )
+        self.assertNotIn("var.dns_entries", resource)
         self.assertNotIn("var.cluster_network || var.compute_cluster", resource)
 
     def test_template_contains_apply_safe_v2_dns_ownership_marker(self):
@@ -2264,8 +2278,7 @@ class ClusterNetworkWiringTests(unittest.TestCase):
             ) as network_file:
                 network_file.write(
                     'resource "oci_dns_rrset" "rrset-cluster-network-OCI" {\n'
-                    "  for_each = var.dns_entries && var.compute_cluster ? "
-                    "toset([for v in range(var.node_count) : tostring(v)]) : []\n"
+                    "  for_each = toset([])\n"
                     "}\n"
                 )
             with open(
@@ -2306,7 +2319,7 @@ class ClusterNetworkWiringTests(unittest.TestCase):
         self.assertIn("managed_dns_ownership_path", gate)
         self.assertNotIn("INSTANCE_POOL_DNS_OWNERSHIP_MARKER_FILENAME", gate)
 
-    def test_shell_managed_pool_gate_includes_ip_and_cn_but_excludes_cc(self):
+    def test_shell_compute_gate_covers_all_autoscaling_compute_types(self):
         for path_parts in (
             ("bin", "configure_as.sh"),
             ("bin", "resize.sh"),
@@ -2315,16 +2328,20 @@ class ClusterNetworkWiringTests(unittest.TestCase):
             with self.subTest(path=os.path.join(*path_parts)):
                 source = self.read(*path_parts)
                 helper = source.split(
-                    "is_autoscaling_managed_pool_deployment()",
+                    "is_autoscaling_compute_deployment()",
                     1,
                 )[1].split("\n}", 1)[0]
                 self.assertRegex(
                     helper,
                     r"cluster_network.*\(true\|false\)",
                 )
-                self.assertIn('variable "compute_cluster"', helper)
-                self.assertIn("default", helper)
-                self.assertIn("true", helper)
+                self.assertIn("variables", helper)
+                self.assertIn("inventory", helper)
+                self.assertNotIn(
+                    "is_autoscaling_managed_pool_deployment",
+                    source,
+                )
+                self.assertNotIn('variable "compute_cluster"', helper)
 
     def test_cleanup_rejects_compute_cluster_child_only_state(self):
         resize = self.read("bin", "resize.py")
@@ -2346,17 +2363,17 @@ class ClusterNetworkWiringTests(unittest.TestCase):
             cleanup,
         )
 
-    def test_monitoring_and_initial_create_use_exact_managed_pool_path_for_cn(self):
+    def test_monitoring_and_initial_create_use_common_compute_path(self):
         resize_shell = self.read("bin", "resize.sh")
         create_shell = self.read("bin", "create_cluster.sh")
         reconcile = resize_shell.split(
-            "reconcile_managed_pool_monitoring()",
+            "reconcile_compute_monitoring()",
             1,
         )[1].split("\n}", 1)[0]
         self.assertIn("list --monitoring-output", reconcile)
         self.assertIn("node_OCID", reconcile)
         self.assertIn("START TRANSACTION", reconcile)
-        self.assertIn('if [ "$compute_cluster" != "true" ]', create_shell)
+        self.assertNotIn('if [ "$compute_cluster" != "true" ]', create_shell)
         self.assertIn("--reconcile-monitoring", create_shell)
 
     def test_monitoring_resolves_cn_from_terraform_state_not_display_name(self):
@@ -2462,11 +2479,8 @@ class ClusterNetworkWiringTests(unittest.TestCase):
             "if args.mode == 'sync_instance_pool_names':",
             1,
         )[1].split("if CN != \"CC\":", 1)[0]
-        self.assertRegex(
-            cli_sync,
-            r'CN\s+not\s+in\s+\[(?=[^]]*"IP")(?=[^]]*"CN")[^]]*\]',
-        )
-        self.assertIn("synchronize_autoscaling_managed_pool_names(", cli_sync)
+        self.assertIn("if not autoscaling:", cli_sync)
+        self.assertIn("synchronize_autoscaling_compute_names(", cli_sync)
         self.assertIn(
             "expected_instance_pool_id=current_instance_pool_id",
             cli_sync,
@@ -2475,8 +2489,12 @@ class ClusterNetworkWiringTests(unittest.TestCase):
             'expected_cluster_network_id=(cn_ocid if CN == "CN" else None)',
             cli_sync,
         )
+        self.assertIn(
+            'expected_compute_cluster_id=(cn_ocid if CN == "CC" else None)',
+            cli_sync,
+        )
 
-    def test_ansible_success_paths_sync_both_managed_pool_deployments(self):
+    def test_ansible_success_paths_sync_all_autoscaling_compute_types(self):
         resize = self.read("bin", "resize.py")
         for function_name, next_function_name in (
             ("add_reconfigure", "reconfigure"),
@@ -2487,15 +2505,13 @@ class ClusterNetworkWiringTests(unittest.TestCase):
                     "def "+function_name+"(",
                     1,
                 )[1].split("\ndef "+next_function_name+"(", 1)[0]
-                self.assertRegex(
-                    function_body,
-                    r'CN\s+in\s+\[(?=[^]]*"IP")(?=[^]]*"CN")[^]]*\]',
-                )
+                self.assertIn("if autoscaling:", function_body)
                 self.assertIn(
-                    "synchronize_autoscaling_managed_pool_names(",
+                    "synchronize_autoscaling_compute_names(",
                     function_body,
                 )
                 self.assertIn("expected_cluster_network_id=", function_body)
+                self.assertIn("expected_compute_cluster_id=", function_body)
 
     def test_pending_cn_sync_is_resumed_before_resize_or_rdma_member_removal(self):
         resize = self.read("bin", "resize.py")
@@ -2507,15 +2523,14 @@ class ClusterNetworkWiringTests(unittest.TestCase):
         resume = resize[resume_start:resume_end]
         for mode in ("add", "remove", "remove_unreachable", "reconfigure"):
             self.assertIn('"'+mode+'"', resume)
-        self.assertRegex(
-            resume,
-            r'CN\s+in\s+\[(?=[^]]*"IP")(?=[^]]*"CN")[^]]*\]',
-        )
+        self.assertIn("if autoscaling and args.mode in [", resume)
         resume_call = resize.index(
-            "synchronize_instance_pool_names(",
+            "synchronize_autoscaling_compute_names(",
             resume_start,
             resume_end,
         )
+        self.assertIn("expected_cluster_network_id=", resume)
+        self.assertIn("expected_compute_cluster_id=", resume)
         detach = resize.index(
             "remove_instance_pool_member_and_managed_local_block_volume(",
             resume_end,
@@ -2569,7 +2584,7 @@ class ClusterNetworkWiringTests(unittest.TestCase):
         self.assertEqual(len(marker_gate), 2)
         self.assertEqual(len(clear_gate), 2)
 
-    def test_add_does_not_publish_generated_cn_name_as_python_owned_dns(self):
+    def test_add_does_not_publish_generated_autoscaling_name_before_sync(self):
         resize = self.read("bin", "resize.py")
         add = resize.split("if args.mode == 'add':", 1)[1]
         dns = add.split("if dns_entries:", 1)[1].split(
@@ -2578,10 +2593,8 @@ class ClusterNetworkWiringTests(unittest.TestCase):
         )[0]
         canonical_update = dns.rsplit("dns_client.update_rr_set", 1)[0]
         canonical_gate = canonical_update.rsplit("if ", 1)[1]
-        self.assertRegex(
-            canonical_gate,
-            r'CN\s+not\s+in\s+\[(?=[^]]*"IP")(?=[^]]*"CN")[^]]*\]',
-        )
+        self.assertRegex(canonical_gate, r"^not autoscaling:")
+        self.assertNotIn('CN not in ["IP", "CN"]', dns)
 
     def test_sync_path_does_not_update_cluster_network_or_rdma_configuration(self):
         resize = self.read("bin", "resize.py")
