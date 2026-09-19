@@ -1,0 +1,23 @@
+---
+- hosts: controller
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Refresh the controller cluster hosts block
+      blockinfile:
+        dest: /etc/hosts
+        marker: "# {mark} ANSIBLE MANAGED BLOCK {{ cluster_name }}"
+        content: "{{ lookup('template', 'templates/instance-pool-hosts.j2') }}"
+        state: present
+      delegate_to: 127.0.0.1
+      run_once: true
+      when: groups.get('compute', []) | length > 0
+
+    - name: Remove stale cluster hosts block when the Instance Pool is empty
+      blockinfile:
+        dest: /etc/hosts
+        marker: "# {mark} ANSIBLE MANAGED BLOCK {{ cluster_name }}"
+        state: absent
+      delegate_to: 127.0.0.1
+      run_once: true
+      when: groups.get('compute', []) | length == 0

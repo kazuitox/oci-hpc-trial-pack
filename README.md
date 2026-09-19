@@ -219,6 +219,28 @@ Autoscaling と同じ仕組みを使って、クラスターを手動で作成�
 
 `instance_keyword` は `queues.conf` の値と一致させてください。
 
+Autoscaling の Instance Pool では、Ansible の構成完了後に各ノードから実際の OS
+ホスト名を取得し、その値へ OCI インスタンス名と Primary VNIC の表示名を自動同期します。
+名前を事前計算するのではなく、Ansible 適用後のホスト名を正として扱います。VNIC の
+`hostname_label` は VCN 内部 DNS 用の別属性であり、変更しません。Secondary VNIC、
+Cluster Network、Compute Cluster も対象外です。既存クラスターを移行する場合は、次の
+再構成を一度実行してください。
+
+ここでいう VNIC 名は Networking サービス上の VNIC リソースの表示名です。VNIC attachment
+は公開 API に更新操作がないため、attachment 固有の表示名は同期対象に含みません。
+
+IAM Policy を手動管理している場合は、実行主体に Primary VNIC の更新権限
+（`VNIC_UPDATE`。通常は `use vnics`）も付与してください。
+
+```bash
+/opt/oci-hpc/bin/resize.sh --cluster_name <cluster_name> reconfigure
+```
+
+同期途中で失敗した場合、次回の `add`、`remove`、`remove_unreachable`、`reconfigure`
+は未完了の再構成と名前同期だけを再開して終了します。同じ台数変更を続けて行う場合は、完了を
+確認してからコマンドをもう一度実行してください。既存クラスターの旧 OCI 名 DNS レコードは、
+この再構成時に Terraform から安全に引き継がれます。
+
 削除:
 
 ```bash

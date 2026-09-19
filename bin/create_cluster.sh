@@ -181,23 +181,31 @@ do
     if [ -f $monitoring_folder/activated ]
     then
       ocid=`tail $logs_folder/create_$2_${date}.log | grep "cluster_ocid =" | awk '{print $3}'`
-      ips=`tail $logs_folder/create_$2_${date}.log | grep "private_ips =" | awk '{print $3}'`
-      hostnames=`tail $logs_folder/create_$2_${date}.log | grep "hostnames =" | awk '{print $3}'`
-      ocids=`tail $logs_folder/create_$2_${date}.log | grep "ocids =" | awk '{print $3}'`
       mysql -u $ENV_MYSQL_USER -p$ENV_MYSQL_PASS -e "use $ENV_MYSQL_DATABASE_NAME; UPDATE cluster_log.clusters SET cluster_OCID='${ocid:1:-1}',created='$end_timestamp',state='running',creation_time=SEC_TO_TIME($runtime) WHERE id='$2_${date}';" >> $logs_folder/create_$2_${date}.log 2>&1
-      export IFS=","
-      for ip in ${ips:1:-5}; do
-        ip_array+=( $ip )
-      done
-      for ocid in ${ocids:1:-5}; do
-        ocid_array+=( $ocid )
-      done
-      for hostname in ${hostnames:1:-1}; do
-        hostname_array+=( $hostname )
-      done
-      for index in "${!ip_array[@]}"; do
+      if [ "$cluster_network" != "true" ] && [ "$compute_cluster" != "true" ]
+      then
+        if ! bash "$folder/resize.sh" --cluster_name "$2" --reconcile-monitoring >> $logs_folder/create_$2_${date}.log 2>&1
+        then
+          echo "Failed to reconcile Instance Pool monitoring with final OS hostnames" >> $logs_folder/create_$2_${date}.log
+        fi
+      else
+        ips=`tail $logs_folder/create_$2_${date}.log | grep "private_ips =" | awk '{print $3}'`
+        hostnames=`tail $logs_folder/create_$2_${date}.log | grep "hostnames =" | awk '{print $3}'`
+        ocids=`tail $logs_folder/create_$2_${date}.log | grep "ocids =" | awk '{print $3}'`
+        export IFS=","
+        for ip in ${ips:1:-5}; do
+          ip_array+=( $ip )
+        done
+        for ocid in ${ocids:1:-5}; do
+          ocid_array+=( $ocid )
+        done
+        for hostname in ${hostnames:1:-1}; do
+          hostname_array+=( $hostname )
+        done
+        for index in "${!ip_array[@]}"; do
           mysql -u $ENV_MYSQL_USER -p$ENV_MYSQL_PASS -e "use $ENV_MYSQL_DATABASE_NAME; UPDATE nodes SET created='$end_timestamp',state='running',hostname='${hostname_array[$index]}',ip='${ip_array[$index]}',node_OCID='${ocid_array[$index]}' WHERE cluster_id='$2_${date}' AND cluster_index=$(($index+1));" >> $logs_folder/create_$2_${date}.log 2>&1
-      done
+        done
+      fi
     fi
     break
   else

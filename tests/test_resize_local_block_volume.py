@@ -641,8 +641,15 @@ class LocalBlockVolumeDeletionTests(unittest.TestCase):
         }
         resume_values = []
         namespace["retry_pending_local_block_volume_deletions"] = (
-            lambda *args, resume_pool_members=False: resume_values.append(
-                resume_pool_members
+            lambda *args,
+            resume_pool_members=False,
+            resume_pool_member_instance_ids=None,
+            expected_instance_pool_id=None: resume_values.append(
+                (
+                    resume_pool_members,
+                    set(resume_pool_member_instance_ids or []),
+                    expected_instance_pool_id,
+                )
             ) or [record]
         )
         with tempfile.TemporaryDirectory() as temp_directory:
@@ -678,7 +685,14 @@ class LocalBlockVolumeDeletionTests(unittest.TestCase):
                 ),
                 [record],
             )
-        self.assertEqual(resume_values, [True, False, True])
+        self.assertEqual(
+            resume_values,
+            [
+                (False, {"ocid1.instance.test"}, None),
+                (False, set(), None),
+                (True, set(), None),
+            ],
+        )
 
     def test_retry_finishes_detached_active_instance_before_deleting_volume(self):
         namespace = load_resize_functions()
@@ -831,6 +845,7 @@ class LocalBlockVolumeDeletionTests(unittest.TestCase):
         namespace["queue"] = "compute"
         namespace["instance_type"] = "hpc"
         namespace["private_subnet_cidr"] = ipaddress.ip_network("10.0.0.0/24")
+        namespace["slurm_enabled"] = True
         record = {
             "cluster_name": "test-cluster",
             "compartment_id": "ocid1.compartment.test",
@@ -848,6 +863,11 @@ class LocalBlockVolumeDeletionTests(unittest.TestCase):
         namespace["dns_client"] = SimpleNamespace(
             list_zones=lambda **kwargs: SimpleNamespace(
                 data=[SimpleNamespace(id="ocid1.dnszone.test")]
+            ),
+            get_rr_set=lambda **kwargs: SimpleNamespace(
+                data=SimpleNamespace(
+                    items=[SimpleNamespace(rtype="A", rdata="10.0.0.10")]
+                )
             ),
             delete_rr_set=lambda **kwargs: deleted_domains.append(kwargs["domain"]),
         )
@@ -880,6 +900,99 @@ class LocalBlockVolumeDeletionTests(unittest.TestCase):
                 ),
                 [record],
             )
+
+    def test_pending_dns_ignores_slurm_alias_when_slurm_is_disabled(self):
+        namespace = load_resize_functions()
+        namespace["zone_name"] = "test-cluster.local"
+        namespace["queue"] = "compute"
+        namespace["instance_type"] = "hpc"
+        namespace["private_subnet_cidr"] = ipaddress.ip_network("10.0.0.0/24")
+        namespace["slurm_enabled"] = False
+
+        self.assertEqual(
+            namespace["get_pending_node_dns_domains"](
+                {
+                    "instance_display_name": "worker-alpha",
+                    "instance_private_ip": "10.0.0.10",
+                }
+            ),
+            ["worker-alpha.test-cluster.local"],
+        )
+
+    def test_pending_dns_preflights_all_records_before_any_delete(self):
+        namespace = load_resize_functions()
+        namespace["zone_name"] = "test-cluster.local"
+        namespace["slurm_enabled"] = False
+        records = [
+            {
+                "instance_display_name": "worker-alpha",
+                "instance_private_ip": "10.0.0.10",
+            },
+            {
+                "instance_display_name": "worker-beta",
+                "instance_private_ip": "10.0.0.11",
+            },
+        ]
+        delete_rr_set = mock.Mock()
+
+        def get_rr_set(**kwargs):
+            private_ip = (
+                "10.0.0.10"
+                if kwargs["domain"].startswith("worker-alpha.")
+                else "10.9.9.9"
+            )
+            return SimpleNamespace(
+                data=SimpleNamespace(
+                    items=[SimpleNamespace(rtype="A", rdata=private_ip)]
+                )
+            )
+
+        namespace["dns_client"] = SimpleNamespace(
+            list_zones=lambda **kwargs: SimpleNamespace(
+                data=[SimpleNamespace(id="ocid1.dnszone.test")]
+            ),
+            get_rr_set=get_rr_set,
+            delete_rr_set=delete_rr_set,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "no longer matches"):
+            namespace["delete_pending_local_block_volume_dns_records_safely"](
+                records,
+                "ocid1.compartment.test",
+            )
+
+        delete_rr_set.assert_not_called()
+
+    def test_pending_dns_rejects_ambiguous_zone_before_delete(self):
+        namespace = load_resize_functions()
+        namespace["zone_name"] = "test-cluster.local"
+        namespace["slurm_enabled"] = False
+        get_rr_set = mock.Mock()
+        delete_rr_set = mock.Mock()
+        namespace["dns_client"] = SimpleNamespace(
+            list_zones=lambda **kwargs: SimpleNamespace(
+                data=[
+                    SimpleNamespace(id="ocid1.dnszone.one"),
+                    SimpleNamespace(id="ocid1.dnszone.two"),
+                ]
+            ),
+            get_rr_set=get_rr_set,
+            delete_rr_set=delete_rr_set,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "Multiple private DNS zones"):
+            namespace["delete_pending_local_block_volume_dns_records_safely"](
+                [
+                    {
+                        "instance_display_name": "worker-alpha",
+                        "instance_private_ip": "10.0.0.10",
+                    }
+                ],
+                "ocid1.compartment.test",
+            )
+
+        get_rr_set.assert_not_called()
+        delete_rr_set.assert_not_called()
 
     def test_cleanup_pending_dns_succeeds_without_zone_and_keeps_journal(self):
         namespace = load_resize_functions()
@@ -934,6 +1047,7 @@ class LocalBlockVolumeDeletionTests(unittest.TestCase):
         namespace["queue"] = "compute"
         namespace["instance_type"] = "hpc"
         namespace["private_subnet_cidr"] = ipaddress.ip_network("10.0.0.0/24")
+        namespace["slurm_enabled"] = True
         record = {
             "cluster_name": "test-cluster",
             "compartment_id": "ocid1.compartment.test",
@@ -971,6 +1085,11 @@ class LocalBlockVolumeDeletionTests(unittest.TestCase):
 
             namespace["dns_client"] = SimpleNamespace(
                 list_zones=list_zones,
+                get_rr_set=lambda **kwargs: SimpleNamespace(
+                    data=SimpleNamespace(
+                        items=[SimpleNamespace(rtype="A", rdata="10.0.0.10")]
+                    )
+                ),
                 delete_rr_set=delete_rr_set,
             )
             namespace["updateTFState"] = update_state
@@ -1246,7 +1365,7 @@ class LocalBlockVolumeDeletionTests(unittest.TestCase):
                             active_instance_private_ips=active_private_ips,
                         )
 
-                    self.assertEqual(operations, ["dns-list"])
+                    self.assertEqual(operations, [])
                     self.assertEqual(
                         namespace["load_pending_local_block_volume_deletions"](
                             inventory_path

@@ -160,6 +160,21 @@ def parseClusterName(config,cluster_name):
             return queue_name,int(cluster_number),instance_keyword
     return None
 
+def getResizeNodeName(node,hosts_entry):
+    for hosts_line in hosts_entry.splitlines():
+        fields=hosts_line.split()
+        if node not in fields or len(fields) < 2:
+            continue
+        # etc-hosts.j2 writes the OCI/Ansible inventory name as the fourth
+        # field.  This is also correct for Compute Cluster, whose Slurm/OS
+        # hostname is intentionally different from the OCI display name.
+        if len(fields) >= 4:
+            return fields[3]
+        for alt_name in fields[1:]:
+            if alt_name.startswith('inst-'):
+                return alt_name
+    return node
+
 def isPermanent(config,queue_name,instance_type_name):
     for partition in config:
         if queue_name == partition["name"]:
@@ -392,21 +407,18 @@ if autoscaling == "true":
             initial_nodes=[]
             unreachable_nodes=[]
             if cluster_name == "NOCLUSTERFOUND":
-                subprocess.Popen([script_path+'/resize.sh','remove_unreachable','--nodes']+nodes_to_destroy[cluster_name],'--quiet')
+                subprocess.Popen([script_path+'/resize.sh','remove_unreachable','--nodes']+nodes_to_destroy[cluster_name]+['--quiet'])
                 continue
             for node in nodes_to_destroy[cluster_name]:
                 try:
-                    alt_names=subprocess.check_output(["cat /etc/hosts | grep "+node],shell=True,universal_newlines=True)
-                    for alt_name in alt_names.split("\n")[0].split():
-                        if alt_name.startswith('inst-'):
-                            initial_nodes.append(alt_name)
-                            break
+                    alt_names=subprocess.check_output(["grep","-w","--",node,"/etc/hosts"],universal_newlines=True)
+                    initial_nodes.append(getResizeNodeName(node,alt_names))
                 except:
                     unreachable_nodes.append(node)    
             if len(initial_nodes) > 0:
-                subprocess.Popen([script_path+'/resize.sh','--force','--cluster_name',cluster_name,'remove','--remove_unreachable','--nodes']+initial_nodes,'--quiet')
+                subprocess.Popen([script_path+'/resize.sh','--force','--cluster_name',cluster_name,'remove','--remove_unreachable','--nodes']+initial_nodes+['--quiet'])
             if len(unreachable_nodes) > 0:
-                subprocess.Popen([script_path+'/resize.sh','--cluster_name',cluster_name,'remove_unreachable','--nodes']+unreachable_nodes,'--quiet')
+                subprocess.Popen([script_path+'/resize.sh','--cluster_name',cluster_name,'remove_unreachable','--nodes']+unreachable_nodes+['--quiet'])
             time.sleep(1)
 
         for index,cluster in enumerate(cluster_to_build):
