@@ -20,6 +20,8 @@
 | REG-010 | 通知フォームとジョブスクリプトを同じ有効条件で制御する。通知の選択は既定でオフとし、空の `--mail-type` や重複する指定を生成しない。 | [test_opencomposer_slurm_mail_notifications.py](../tests/test_opencomposer_slurm_mail_notifications.py)：フォームとスクリプト生成定義の静的検査。 |
 | REG-011 | OOD の CPU Cores 表示はノードごとの物理コアを集計し、HT 有効・無効の混在や重複ノードで誤集計しない。 | [test_openondemand_system_status_cores.py](../tests/test_openondemand_system_status_cores.py)：配置設定の検査と Ruby による集計処理の実行。Ruby がない場合は実行テストをスキップ。 |
 | REG-016 | Slurm利用者をDefinedタグ`hpc-cost.User`へ非同期反映する。アイドル時は`Management`、複数ユーザーの共有時はこのキーだけを除去し、他のDefinedタグとfreeformタグを保持する。遅延イベント、再試行、排他制御で新しい利用者を過去の状態へ戻さない。初期ノード・Autoscalingノードでも同じキーと既定値を使い、既存ノードの実行中ユーザー値を新規ノードへ複製しない。 | [test_slurm_oci_user_tags.py](../tests/test_slurm_oci_user_tags.py)：OCI・Slurmをモック化した更新処理。[test_slurm_user_tags_configuration.py](../tests/test_slurm_user_tags_configuration.py)：Terraform・設定経路の静的検査とJinja2レンダリング。[test_create_cluster_cost_tags.py](../tests/test_create_cluster_cost_tags.py)：作成タグの選択処理。[test_resize_local_block_volume.py](../tests/test_resize_local_block_volume.py)：ノード複製時のタグ保持・初期化。 |
+| REG-017 | Instance Pool・Cluster Network・Compute Clusterの実OSホスト名とOCI表示名・DNS・inventoryを整合させる。所属・所有権とTerraform管理ノードを保護し、部分失敗の記録・再試行・排他制御を維持する。 | [Instance Pool](../tests/test_resize_instance_pool_hostname_sync.py)、[Cluster Network](../tests/test_resize_cluster_network_hostname_sync.py)、[Compute Cluster](../tests/test_resize_compute_cluster_hostname_sync.py)：OCI等をモック化した同期・移行・削除の処理テスト。REG-002 / REG-016と併せ、新規ノードの一時名とコストタグ初期化も確認する。 |
+| REG-018 | AMD VMの対応するHT設定を初期・動的ノードへ渡す。非対応キュー設定を反映前に拒否し、VMではOS側のCPUオフライン化をしない。BMのCPU範囲表記と失敗検出を維持する。 | [Terraform設定](../tests/test_instance_pool_hyperthreading_terraform.py)、[HT role](../tests/test_hyperthreading_role.py)、[OS側制御](../tests/test_hyperthreading_guest.py)、[キュー検証](../tests/test_slurm_config_validation.py)。Terraform mock planは1.7以上が必要。実機のShape対応情報は別途確認する。 |
 
 ## 自動検証が未整備の振る舞い
 
@@ -47,6 +49,8 @@
 | REG-014 | 変更した CPU / GPU・VNC / DCV の組合せでデスクトップジョブを投入し、所定のキュー、ノード構成、ブラウザー接続を確認する。旧設定を使う更新でも互換動作が保たれる。 |
 | REG-015 | 対象となる IAM / 通知設定の組合せで Terraform の参照と権限要求を確認する。タグ定義に必要な参照と、それ以外の機能に由来する参照を区別する。 |
 | REG-016 | [ユーザー別コストタグの検証手順](slurm-user-cost-tags.md#検証手順)に従い、デプロイ先コンパートメントに`hpc-cost`とStatic valueの`User`が作成されること、初期ノード・Autoscalingノードで`Management`→ユーザー名→`Management`へ反映されることを確認する。複数ユーザー共有時は対象キーのみ除去し、他タグを保持する。フラグ無効時も定義と作成時タグは残り、非同期更新だけが停止する。既存のfreeformタグからの更新とIAM外部管理時の必要権限も確認する。 |
+| REG-017 | 3種類の作成方式でOSホスト名とOCIインスタンス・Primary VNIC表示名を照合する。既存構成はREADMEのreconfigure手順でDNSを移行し、部分失敗後の再開、対象外ノード・共有リソースの保持を確認する。 |
+| REG-018 | AMD VMのHT On/Offを初期・動的ノードで確認する。Intel VMのHT Off拒否、HT Onの従来構成、BM制御を確認する。既存VMの構成更新だけでHTが変わったと判断しない。 |
 
 ## 台帳の更新方法
 

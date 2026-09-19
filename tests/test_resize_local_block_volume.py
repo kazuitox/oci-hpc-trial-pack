@@ -53,8 +53,14 @@ class ComputeClusterLaunchCostTagTests(unittest.TestCase):
         )
         self.namespace["computeClient"] = SimpleNamespace(
             list_vnic_attachments=lambda **kwargs: SimpleNamespace(
-                data=[SimpleNamespace(display_name=None, subnet_id="ocid1.subnet.test")]
+                data=[SimpleNamespace(lifecycle_state="ATTACHED", vnic_id="ocid1.vnic.test")]
             )
+        )
+        self.namespace["virtualNetworkClient"] = SimpleNamespace(
+            get_vnic=lambda *args, **kwargs: SimpleNamespace(data=SimpleNamespace(
+                id="ocid1.vnic.test", is_primary=True, lifecycle_state="AVAILABLE",
+                private_ip="10.0.0.10", subnet_id="ocid1.subnet.test",
+            ))
         )
         self.instance = SimpleNamespace(
             id="ocid1.instance.source",
@@ -79,8 +85,7 @@ class ComputeClusterLaunchCostTagTests(unittest.TestCase):
             self.instance,
             "ocid1.compartment.test",
             "ocid1.computecluster.test",
-            2,
-            0,
+            "cc-node-pending-test",
             {
                 "enabled": local_scratch,
                 "size_in_gbs": 100,
@@ -104,6 +109,8 @@ class ComputeClusterLaunchCostTagTests(unittest.TestCase):
                 }
                 details = self.launch(source_tags, local_scratch=local_scratch,
                                       source_defined_tags=source_defined_tags)
+                self.assertEqual(details.display_name, "cc-node-pending-test")
+                self.assertEqual(details.create_vnic_details.subnet_id, "ocid1.subnet.test")
                 self.assertEqual(details.defined_tags, {
                     "hpc-cost": {"User": "Management", "Project": "research", "user": "keep"},
                     "other": {"User": "keep", "CostCenter": 123},

@@ -6417,7 +6417,7 @@ def backup_inventory(inventory):
         print("File "+tmp_file_do_not_edit+" exist, it means previous reconfigure had failed. Hence updating inventory to previous state")
         shutil.move(tmp_file_do_not_edit,inventory)
 
-def destroy_unreachable_reconfigure(inventory,nodes_to_remove,playbook): 
+def destroy_unreachable_reconfigure(inventory,nodes_to_remove,playbook):
     if not os.path.isfile("/etc/ansible/hosts"):
         print("There is no inventory file, are you on the controller? The cluster has not been resized")
         exit()

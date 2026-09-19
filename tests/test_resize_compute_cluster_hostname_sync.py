@@ -1040,6 +1040,7 @@ class ComputeClusterLaunchDisplayNameTests(unittest.TestCase):
         existing.shape = "BM.Optimized3.36"
         existing.source_details = SimpleNamespace(source_id="ocid1.image.test")
         existing.metadata = {"ssh_authorized_keys": "test-key"}
+        existing.defined_tags = {"hpc-cost": {"User": "alice"}}
         primary_vnic = SimpleNamespace(
             id="ocid1.vnic.primary",
             is_primary=True,
@@ -1079,6 +1080,8 @@ class ComputeClusterLaunchDisplayNameTests(unittest.TestCase):
 
         self.assertEqual(launch.display_name, pending_name)
         self.assertNotIn("actual-ansible-host", launch.display_name)
+        self.assertEqual(launch.defined_tags["hpc-cost"]["User"], "Management")
+        self.assertEqual(existing.defined_tags["hpc-cost"]["User"], "alice")
 
     def test_rollback_uses_the_launch_response_ocid_not_a_temporary_name(self):
         launched = compute_instance(
