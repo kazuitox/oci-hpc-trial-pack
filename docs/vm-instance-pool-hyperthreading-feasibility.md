@@ -9,7 +9,7 @@
 | 対象 | 現行の処理 |
 | --- | --- |
 | AMD VM | ListShapes の型と許容値を確認し、OCI platform_config に `hyperthreading` を反映 |
-| Intel VM / `hyperthreading=false` | 初期構築・Autoscaling ともに Terraform の precondition で作成前に拒否 |
+| Intel VM / `hyperthreading=false` | `slurm_config.sh` の設定反映前に拒否。初期構築・Autoscaling の Terraform precondition も維持 |
 | Intel VM / `hyperthreading=true` | HT 用 platform_config を送信せず、Shape の既定設定を維持 |
 | すべての VM のゲスト OS | HT サービスを新規導入せず、スクリプトの on / off も CPU 状態を変更しない |
 | ベアメタル | 既存の BIOS / SMT と OS 側の HT 制御を維持 |
@@ -32,9 +32,19 @@ ANSIBLE_PLAYBOOK_BINARY=/path/to/ansible-playbook \
 
 VM 判定コマンド、既存サービスの無効化、AMD の新規ノード作成は、デプロイ後の実機確認が必要である。
 
-以下は、対応範囲を決定するまでの仕様調査と過去の実機検証記録である。API が Intel 用属性を持つことと、このリポジトリで Intel VM の HT Off をサポートすることは別である。
+### queues.conf 反映時の事前検証（2026-09-19）
+
+`bin/slurm_config.sh` の先頭で `bin/validate_queues.py` を実行し、Ansible、`--initial` のトポロジーファイル削除、Slurm の再設定より前に検証する。Python / PyYAML は既存の Autoscaling 処理でも使用している。設定は書き換えず、エラーがあれば標準エラー出力にキュー名・インスタンスタイプ名・対象 Shape を表示して非 0 で終了する。
+
+従来の `instance_keyword` 重複チェックも YAML の値で比較する処理へ移し、非隣接の重複や引用符・コメントの違いに左右されないようにした。通常ノード・非デフォルト・Permanent を含む全インスタンスタイプを検証し、HT の未設定・不正値も拒否する。
+
+このチェックは OCI に接続せず、既知の AMD VM ファミリー `VM.Standard.E*` / `VM.DenseIO.E*` と、Arm `VM.Standard.A[数字]*` を区別する。その他の VM の HT Off は、Intel と断定できない未知の名前も含めて対象外として拒否する。GPU の `VM.GPU.A10.*` を Arm と誤認しない。Shape 名だけで AMD の SMT 対応を保証せず、実際の AD / Shape の capability は Terraform の既存チェックで確認する。
+
+`slurm_config.sh` 自体と同じ `bin` ディレクトリの `validate_queues.py` をセットで更新する。Terraform と OS 側の VM ガードは維持する。
 
 ## 仕様調査と過去の検証範囲
+
+以下は、対応範囲を決定するまでの仕様調査と過去の実機検証記録である。API が Intel 用属性を持つことと、このリポジトリで Intel VM の HT Off をサポートすることは別である。
 
 **OCI の仕様と Terraform Provider の実装上、対応する VM Shape では Instance Configuration に HT（SMT）の On / Off を設定し、その Configuration を参照する Instance Pool を作成できる。** リポジトリが固定している OCI Provider **5.37.0 は対応済み**で、この機能のための Provider 更新は不要。
 

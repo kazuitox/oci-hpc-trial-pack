@@ -124,7 +124,7 @@ conf/queues.conf.example
 - `max_cluster_count`: 同時に保持できる最大クラスター数。
 - `cluster_network` / `compute_cluster`: 作成方式を指定します。
 - `ad`: 複数 AD を空白区切りで指定すると、作成失敗時に別 AD を試行します。
-- `hyperthreading`: 対応する **AMD VM** の Instance Pool では、`false` で HT Off、`true` で HT On を OCI 起動時に指定します。Intel VM の HT Off は対象外で、`false` を指定すると作成前にエラーになります。VM にはキューの値を使用し、BM 向けの `BIOS` / `SMT` 設定とは独立して制御します。
+- `hyperthreading`: 対応する **AMD VM** の Instance Pool では、`false` で HT Off、`true` で HT On を OCI 起動時に指定します。Intel VM の HT Off は対象外で、`false` を指定すると `slurm_config.sh` による設定反映時にエラーになります。直接作成する経路でも Terraform が作成前に拒否します。VM にはキューの値を使用し、BM 向けの `BIOS` / `SMT` 設定とは独立して制御します。
 - `use_local_block_volume`: 各 Compute node 専用の一時 Block Volume をアタッチします。
 - `local_block_volume_size`: ノードごとの Block Volume サイズ（50 GB 以上の整数）です。
 - `local_block_volume_performance`: `0.  Lower performance`、`10. Balanced performance`、`20. High Performance` のいずれかを指定します。
@@ -145,6 +145,8 @@ OCI の起動時 HT 設定の変更は、新規作成する VM が対象です�
 ```bash
 /opt/oci-hpc/bin/slurm_config.sh
 ```
+
+実行時に `queues.conf` 全体を検証します。Intel VM など AMD / Arm と判定できない VM の `hyperthreading=false`、HT 値の未設定・不正値、`instance_keyword` の重複を検出すると、該当するキュー名・インスタンスタイプ名を表示して終了します。Slurm 設定は反映せず、`--initial` でもトポロジーファイルの削除や Slurm の再設定より前に止まります。AMD の Shape ごとの実際の SMT 対応状況は、引き続き Terraform が OCI の情報で確認します。
 
 Slurm の状態を初期状態に戻したい場合は、次を実行します。
 
