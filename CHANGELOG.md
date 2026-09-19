@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [v1.3.1] - 2026-09-19
+
+### Fixed
+
+- 通常のAutoscalingでクラスターを削除する直前に、Slurm topology・ノード状態・全状態のジョブを確認し、DRAIN後にも再確認するようにしました。RUNNING・SUSPENDED・COMPLETINGのジョブや、確認中の状態変化がある場合は削除を見送ります。
+- アイドル時間を`LastBusyTime`と`SlurmdStartTime`から判定し、時刻不明のノードに架空の過去時刻を設定する処理を廃止しました。割当のない障害ノードは、同じ削除前確認を経て回収します。
+- 削除プロセスの受付を`currently_destroying`で確認します。起動失敗・受付前終了時はこの実行が設定したDRAINだけを解除するよう試み、受付結果が不明な場合はDRAINを維持します。
+- 安全確認のSlurmコマンドにタイムアウトを設定し、出力フィルターとなる環境変数を除外します。非root実行時のノード状態更新には`sudo -n`を使用します。
+
+### Compatibility / 運用
+
+- v1.3.0に`fix/autoscale-safe-node-removal`だけを統合したパッチです。実装変更は通常のAutoscalingスクリプトで、Terraform・IAM・キュー変数・計算ノード構成は変更していません。
+- 既存コントローラーではAutoscalingの実行状況を確認して修正版スクリプトを配布してください。DRAINが残る場合の確認・復旧と切り戻し手順は[リリースノート](docs/releases/v1.3.1.md)を参照してください。
+- Compute Clusterのフラグ解釈の変更は含みません。引き続き`cluster_network: true`と`compute_cluster: true`を使用します。
+
 ## [v1.3.0] - 2026-09-19
 
 ### Added
@@ -73,3 +88,5 @@
 [v1.0.0]: https://github.com/kazuitox/oci-hpc-trial-pack/releases/tag/v1.0.0
 
 [v1.3.0]: https://github.com/kazuitox/oci-hpc-trial-pack/releases/tag/v1.3.0
+
+[v1.3.1]: https://github.com/kazuitox/oci-hpc-trial-pack/releases/tag/v1.3.1

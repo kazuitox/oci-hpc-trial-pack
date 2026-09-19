@@ -22,6 +22,7 @@
 | REG-016 | Slurm利用者をDefinedタグ`hpc-cost.User`へ非同期反映する。アイドル時は`Management`、複数ユーザーの共有時はこのキーだけを除去し、他のDefinedタグとfreeformタグを保持する。遅延イベント、再試行、排他制御で新しい利用者を過去の状態へ戻さない。初期ノード・Autoscalingノードでも同じキーと既定値を使い、既存ノードの実行中ユーザー値を新規ノードへ複製しない。 | [test_slurm_oci_user_tags.py](../tests/test_slurm_oci_user_tags.py)：OCI・Slurmをモック化した更新処理。[test_slurm_user_tags_configuration.py](../tests/test_slurm_user_tags_configuration.py)：Terraform・設定経路の静的検査とJinja2レンダリング。[test_create_cluster_cost_tags.py](../tests/test_create_cluster_cost_tags.py)：作成タグの選択処理。[test_resize_local_block_volume.py](../tests/test_resize_local_block_volume.py)：ノード複製時のタグ保持・初期化。 |
 | REG-017 | Instance Pool・Cluster Network・Compute Clusterの実OSホスト名とOCI表示名・DNS・inventoryを整合させる。所属・所有権とTerraform管理ノードを保護し、部分失敗の記録・再試行・排他制御を維持する。 | [Instance Pool](../tests/test_resize_instance_pool_hostname_sync.py)、[Cluster Network](../tests/test_resize_cluster_network_hostname_sync.py)、[Compute Cluster](../tests/test_resize_compute_cluster_hostname_sync.py)：OCI等をモック化した同期・移行・削除の処理テスト。REG-002 / REG-016と併せ、新規ノードの一時名とコストタグ初期化も確認する。 |
 | REG-018 | AMD VMの対応するHT設定を初期・動的ノードへ渡す。非対応キュー設定を反映前に拒否し、VMではOS側のCPUオフライン化をしない。BMのCPU範囲表記と失敗検出を維持する。 | [Terraform設定](../tests/test_instance_pool_hyperthreading_terraform.py)、[HT role](../tests/test_hyperthreading_role.py)、[OS側制御](../tests/test_hyperthreading_guest.py)、[キュー検証](../tests/test_slurm_config_validation.py)。Terraform mock planは1.7以上が必要。実機のShape対応情報は別途確認する。 |
+| REG-019 | 通常のAutoscalingの削除前にノード全体と未終了ジョブを確認し、DRAIN後に再確認する。時刻不明を架空のアイドル時間へ変換しない。削除起動前の失敗・受付前終了時は自分のDRAINだけを解除するよう試み、受付不明時は保持する。 | [test_autoscale_safe_delete.py](../tests/test_autoscale_safe_delete.py)：アイドル時刻、RUNNING / SUSPENDED / COMPLETING、障害状態、DRAIN中のジョブ変化、部分失敗、起動失敗・受付前終了・受付不明のモックテスト。実機のSlurm権限と削除受付のタイミングは別途確認。 |
 
 ## 自動検証が未整備の振る舞い
 
@@ -51,6 +52,7 @@
 | REG-016 | [ユーザー別コストタグの検証手順](slurm-user-cost-tags.md#検証手順)に従い、デプロイ先コンパートメントに`hpc-cost`とStatic valueの`User`が作成されること、初期ノード・Autoscalingノードで`Management`→ユーザー名→`Management`へ反映されることを確認する。複数ユーザー共有時は対象キーのみ除去し、他タグを保持する。フラグ無効時も定義と作成時タグは残り、非同期更新だけが停止する。既存のfreeformタグからの更新とIAM外部管理時の必要権限も確認する。 |
 | REG-017 | 3種類の作成方式でOSホスト名とOCIインスタンス・Primary VNIC表示名を照合する。既存構成はREADMEのreconfigure手順でDNSを移行し、部分失敗後の再開、対象外ノード・共有リソースの保持を確認する。 |
 | REG-018 | AMD VMのHT On/Offを初期・動的ノードで確認する。Intel VMのHT Off拒否、HT Onの従来構成、BM制御を確認する。既存VMの構成更新だけでHTが変わったと判断しない。 |
+| REG-019 | [v1.3.1の検証・復旧手順](releases/v1.3.1.md)に従い、RUNNING / SUSPENDED / COMPLETING中の保護、通常アイドル削除、DRAIN中の状態変化、構築・削除中の見送り、受付不明時のDRAIN保持を確認する。REG-012の作成・permanent・上限確認も維持する。 |
 
 ## 台帳の更新方法
 

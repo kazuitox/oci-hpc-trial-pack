@@ -1,6 +1,6 @@
 # OCI HPC Trial Pack
 
-[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/kazuitox/oci-hpc-trial-pack/archive/refs/tags/v1.3.0.zip)
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/kazuitox/oci-hpc-trial-pack/archive/refs/tags/v1.3.1.zip)
 
 本リポジトリは、Oracle Cloud Infrastructure (OCI) 上に HPC 環境を短時間で構築し、PoC や初期検証をすばやく開始することを目的としています。
 この目的に合わせて、現時点では Oracle Linux 8 を対象 OS として動作確認しています。その他の OS やバージョンについては未検証のため、利用する場合は個別に検証してください。
@@ -19,9 +19,13 @@ Terraform / Oracle Resource Manager スタックとして、コントローラ�
 
 変更履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
 
+## v1.3.1への更新
+
+v1.3.1はAutoscalingの自動削除前にジョブとノード状態を確認し、DRAIN後の再確認を追加したパッチです。削除受付が不明な場合はDRAINを維持します。既存コントローラーへの配布、必要なSlurm操作権限、ログ確認と復旧・切り戻しは[リリースノート](docs/releases/v1.3.1.md)を参照してください。上のデプロイボタンはv1.3.1に固定しています。
+
 ## v1.3.0への更新
 
-v1.3.0はホスト名同期、AMD VMのHT制御、Slurmユーザー別コストタグをまとめたリリースです。既存環境ではキュー設定、Terraform 1.5.0以上、タグ定義とIAM権限、名前・DNSの移行を確認してください。更新手順と制約は[リリースノート](docs/releases/v1.3.0.md)にまとめています。上のデプロイボタンはv1.3.0に固定しています。
+v1.3.0はホスト名同期、AMD VMのHT制御、Slurmユーザー別コストタグをまとめたリリースです。既存環境ではキュー設定、Terraform 1.5.0以上、タグ定義とIAM権限、名前・DNSの移行を確認してください。更新手順と制約は[リリースノート](docs/releases/v1.3.0.md)にまとめています。
 
 ## 主な構成
 
