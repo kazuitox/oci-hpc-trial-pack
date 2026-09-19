@@ -11,6 +11,7 @@ resource "oci_core_compute_cluster" "compute_cluster" {
 
   #Optional
   display_name = local.cluster_name
+  defined_tags = local.user_cost_tags
   freeform_tags = {
     "cluster_name"  = local.cluster_name
     "parent_cluster" = local.cluster_name

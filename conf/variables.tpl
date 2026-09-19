@@ -37,6 +37,10 @@ variable "zone_name" {default = "${zone_name}"}
 variable "dns_entries" {default = "${dns_entries}"}
 variable "healthchecks" {default = "${healthchecks}"}
 variable "slurm" { default = ${slurm} }
+variable "slurm_user_tags_enabled" {
+  type = bool
+  default = ${slurm_user_tags_enabled}
+}
 variable "slurm_job_notifications_enabled" { default = ${slurm_job_notifications_enabled} }
 variable "slurm_notification_region" { default = "${slurm_notification_region}" }
 variable "slurm_notification_compartment_id" { default = "${slurm_notification_compartment_id}" }

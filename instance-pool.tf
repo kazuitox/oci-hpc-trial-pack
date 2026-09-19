@@ -31,6 +31,7 @@ resource "oci_core_instance_pool" "instance_pool" {
   instance_configuration_id = oci_core_instance_configuration.instance_pool_configuration[0].id
   size                      = var.node_count
   display_name              = local.cluster_name
+  defined_tags = local.user_cost_tags
   freeform_tags = {
       "cluster_name" = local.cluster_name
       "parent_cluster" = local.cluster_name

@@ -68,10 +68,10 @@ resource "oci_core_instance" "compute_cluster_instances" {
 
   display_name        = "${local.cluster_name}-node-${var.compute_cluster_start_index+count.index}"
 
+  defined_tags = local.user_cost_tags
   freeform_tags = {
     "cluster_name"                       = local.cluster_name
     "parent_cluster"                     = local.cluster_name
-    "user"                               = var.tags
     "oci_hpc_local_block_volume"         = tostring(tobool(var.use_local_block_volume))
     "oci_hpc_local_block_volume_size"    = tostring(tonumber(var.local_block_volume_size))
     "oci_hpc_local_block_volume_vpus"    = tostring(tonumber(split(".", var.local_block_volume_performance)[0]))
@@ -120,6 +120,7 @@ resource "oci_core_instance" "compute_cluster_instances" {
       create_vnic_details[0].display_name,
       launch_volume_attachments,
       preserve_data_volumes_created_at_launch,
+      defined_tags["hpc-cost.User"],
       freeform_tags["oci_hpc_local_block_volume"],
       freeform_tags["oci_hpc_local_block_volume_size"],
       freeform_tags["oci_hpc_local_block_volume_vpus"],

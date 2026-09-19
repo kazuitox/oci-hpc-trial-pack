@@ -173,6 +173,12 @@ variable "ood_vnc_gpu_image_operating_system_version" {
 }
 variable "slurm" { default = true }
 variable "slurm_ha" { default = false }
+variable "slurm_user_tags_enabled" {
+  type        = bool
+  default     = true
+  description = "Update compute node hpc-cost.User defined tags from Slurm job ownership; idle nodes use Management."
+}
+
 variable "slurm_job_notifications_enabled" {
   type    = bool
   default = false
@@ -434,7 +440,7 @@ variable "percentage_of_cores_enabled" {
 }
 variable "timezone" { default = "Asia/Tokyo" }
 variable "use_ood" { default = "true" }
-variable "tags" { default = "user" }
+variable "tags" { default = "Management" }
 
 variable "ui_mode" {
   type    = string

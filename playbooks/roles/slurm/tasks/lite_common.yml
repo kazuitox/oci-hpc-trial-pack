@@ -189,3 +189,7 @@
     group: root
     mode: '0755'
   when: healthchecks|bool
+
+- name: Configure Slurm compute user tags
+  ansible.builtin.include_tasks: user_tags.yml
+  when: "'controller' in group_names or 'slurm_backup' in group_names or 'compute' in group_names"

@@ -33,6 +33,7 @@ resource "oci_core_cluster_network" "cluster_network" {
     size                      = var.node_count
     display_name              = local.cluster_name
   }
+  defined_tags = local.user_cost_tags
   freeform_tags = {
       "cluster_name" = local.cluster_name
       "parent_cluster" = local.cluster_name

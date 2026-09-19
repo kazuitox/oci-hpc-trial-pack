@@ -38,14 +38,12 @@ locals {
   compute_username                    = local.simple_mode && local.simple_preinstalled_compute_image ? local.simple_compute_image.username : var.compute_username
   controller_username                 = local.use_imported_compute_image_for_controller ? local.compute_username : var.controller_username
 
-  needs_home_region = var.create_iam_policy_dynamic_group || var.slurm_job_notifications_enabled
-  region_map = local.needs_home_region ? {
-    for region in data.oci_identity_regions.regions[0].regions :
+  # Defined cost tags are always created and managed through the home region.
+  region_map = {
+    for region in data.oci_identity_regions.regions.regions :
     region.key => region.name
-  } : {}
-  home_region = local.needs_home_region ? local.region_map[
-    data.oci_identity_tenancy.tenancy[0].home_region_key
-  ] : var.region
+  }
+  home_region = local.region_map[data.oci_identity_tenancy.tenancy.home_region_key]
 
 // display names of instances 
   cluster_instances_ids = var.compute_cluster ? oci_core_instance.compute_cluster_instances.*.id : var.cluster_network ? data.oci_core_instance.cluster_network_instances.*.id : data.oci_core_instance.instance_pool_instances.*.id

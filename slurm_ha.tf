@@ -57,6 +57,8 @@ resource "null_resource" "backup" {
   count = var.slurm_ha ? 1 : 0
   depends_on = [oci_core_instance.backup] 
   triggers = merge({
+    slurm_user_tags_enabled = tostring(var.slurm && var.slurm_user_tags_enabled)
+    user_cost_tag_key       = local.user_cost_tag_key
     backup = oci_core_instance.backup[0].id
   }, var.slurm_job_notifications_enabled ? {
     slurm_notification_payload = local.slurm_notification_payload_hash
@@ -191,6 +193,8 @@ resource "null_resource" "cluster_backup" {
     oci_identity_policy.slurm_notification_controllers,
   ]
   triggers = merge({
+    slurm_user_tags_enabled = tostring(var.slurm && var.slurm_user_tags_enabled)
+    user_cost_tag_key       = local.user_cost_tag_key
     cluster_instances           = join(", ", local.cluster_instances_names)
     cluster_instance_ids        = join(", ", local.cluster_instances_ids)
     local_block_volume_settings = sha256(jsonencode([var.use_local_block_volume, var.local_block_volume_size, var.local_block_volume_performance, var.local_block_volume_mount_point]))
@@ -245,6 +249,7 @@ resource "null_resource" "cluster_backup" {
       cluster_network = var.cluster_network,
       use_compute_agent = var.use_compute_agent,
       slurm = var.slurm,
+      slurm_user_tags_enabled = var.slurm && var.slurm_user_tags_enabled,
       slurm_job_notifications_enabled = var.slurm_job_notifications_enabled,
       slurm_notification_region = var.region,
       slurm_notification_compartment_id = var.targetCompartment,
@@ -406,6 +411,7 @@ resource "null_resource" "cluster_backup" {
       scratch_nfs_path = var.scratch_nfs_path,
       use_scratch_nfs = var.use_scratch_nfs,
       slurm = var.slurm,
+      slurm_user_tags_enabled = var.slurm && var.slurm_user_tags_enabled,
       slurm_job_notifications_enabled = var.slurm_job_notifications_enabled,
       slurm_notification_region = var.region,
       slurm_notification_compartment_id = var.targetCompartment,
@@ -415,7 +421,7 @@ resource "null_resource" "cluster_backup" {
       slurm_notification_admin_email = local.slurm_notification_admin_email,
       slurm_notification_topic_id = local.slurm_notification_topic_id,
       slurm_notification_subscription_id = local.slurm_notification_subscription_id,
-      slurm_nfs_path = var.add_nfs ? var.nfs_source_path : var.cluster_nfs_path,
+      slurm_nfs_path = var.slurm_nfs ? var.nfs_source_path : var.cluster_nfs_path,
       rack_aware = var.rack_aware,
       spack = var.spack,
       install_application = var.install_application,

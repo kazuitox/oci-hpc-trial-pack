@@ -1,0 +1,18 @@
+[Unit]
+Description=Reconcile Slurm compute user tags with OCI
+After=network-online.target slurmctld.service
+Wants=network-online.target
+RequiresMountsFor={{ slurm_user_tags_state_dir }}
+ConditionPathExists={{ slurm_conf_path }}/oci-user-tags.json
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PYTHONNOUSERSITE=1
+ExecStart=/usr/local/sbin/slurm-oci-user-tags reconcile --config {{ slurm_conf_path }}/oci-user-tags.json
+TimeoutStartSec=60s
+KillMode=control-group
+NoNewPrivileges=true

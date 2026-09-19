@@ -45,6 +45,7 @@ resource "oci_core_instance_configuration" "cluster-network-instance_configurati
       create_vnic_details {
       }
       display_name = local.cluster_name
+      defined_tags = local.user_cost_tags
       freeform_tags = {
         "cluster_name"                       = local.cluster_name
         "parent_cluster"                     = local.cluster_name
@@ -123,4 +124,9 @@ resource "oci_core_instance_configuration" "cluster-network-instance_configurati
   }
 
   source = "NONE"
+
+  lifecycle {
+    # Pools must switch to the new launch tags before the old configuration is removed.
+    create_before_destroy = true
+  }
 }

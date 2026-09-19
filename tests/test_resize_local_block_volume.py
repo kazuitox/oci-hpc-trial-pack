@@ -33,6 +33,109 @@ def load_resize_functions():
     return namespace
 
 
+class ComputeClusterLaunchCostTagTests(unittest.TestCase):
+    def setUp(self):
+        self.namespace = load_resize_functions()
+
+        class FakeModel:
+            def __init__(self, **kwargs):
+                self.__dict__.update(kwargs)
+
+        self.namespace["oci"].core = SimpleNamespace(
+            models=SimpleNamespace(
+                LaunchInstanceAgentConfigDetails=FakeModel,
+                CreateVnicDetails=FakeModel,
+                LaunchInstanceShapeConfigDetails=FakeModel,
+                LaunchInstanceDetails=FakeModel,
+                LaunchCreateVolumeFromAttributes=FakeModel,
+                LaunchAttachIScsiVolumeDetails=FakeModel,
+            )
+        )
+        self.namespace["computeClient"] = SimpleNamespace(
+            list_vnic_attachments=lambda **kwargs: SimpleNamespace(
+                data=[SimpleNamespace(display_name=None, subnet_id="ocid1.subnet.test")]
+            )
+        )
+        self.instance = SimpleNamespace(
+            id="ocid1.instance.source",
+            agent_config=FakeModel(),
+            display_name="test-cluster-node-2",
+            availability_domain="test-ad",
+            shape="BM.HPC2.36",
+            shape_config=SimpleNamespace(
+                baseline_ocpu_utilization=None,
+                memory_in_gbs=384,
+                ocpus=36,
+                local_disks=1,
+            ),
+            source_details=FakeModel(source_id="ocid1.image.test"),
+            metadata={"ssh_authorized_keys": "test-key"},
+        )
+
+    def launch(self, source_tags, local_scratch=False, source_defined_tags=None):
+        self.instance.freeform_tags = source_tags
+        self.instance.defined_tags = source_defined_tags
+        return self.namespace["getLaunchInstanceDetails"](
+            self.instance,
+            "ocid1.compartment.test",
+            "ocid1.computecluster.test",
+            2,
+            0,
+            {
+                "enabled": local_scratch,
+                "size_in_gbs": 100,
+                "vpus_per_gb": 10,
+                "mount_point": "/scratch",
+            },
+        )
+
+    def test_new_node_does_not_inherit_running_users_cost_tag(self):
+        for local_scratch in (False, True):
+            with self.subTest(local_scratch=local_scratch):
+                source_tags = {
+                    "user": "alice",
+                    "cluster_name": "test-cluster",
+                    "parent_cluster": "test-cluster",
+                    "customer": "research",
+                }
+                source_defined_tags = {
+                    "hpc-cost": {"User": "alice", "Project": "research", "user": "keep"},
+                    "other": {"User": "keep", "CostCenter": 123},
+                }
+                details = self.launch(source_tags, local_scratch=local_scratch,
+                                      source_defined_tags=source_defined_tags)
+                self.assertEqual(details.defined_tags, {
+                    "hpc-cost": {"User": "Management", "Project": "research", "user": "keep"},
+                    "other": {"User": "keep", "CostCenter": 123},
+                })
+                self.assertNotIn("user", details.freeform_tags)
+                self.assertEqual(details.freeform_tags["customer"], "research")
+                self.assertEqual(details.freeform_tags["cluster_name"], "test-cluster")
+                self.assertEqual(details.freeform_tags["parent_cluster"], "test-cluster")
+                self.assertEqual(source_tags["user"], "alice")
+                self.assertEqual(source_defined_tags["hpc-cost"]["User"], "alice")
+                self.assertIsNot(details.freeform_tags, source_tags)
+                self.assertIsNot(details.defined_tags, source_defined_tags)
+                for namespace in source_defined_tags:
+                    self.assertIsNot(details.defined_tags[namespace], source_defined_tags[namespace])
+                self.assertEqual(details.freeform_tags["oci_hpc_local_block_volume"],
+                                 "true" if local_scratch else "false")
+                self.assertEqual(hasattr(details, "launch_volume_attachments"), local_scratch)
+
+    def test_legacy_source_without_tags_still_starts_as_management(self):
+        for source_tags in (None, {}, {"parent_cluster": "test-cluster"}):
+            for source_defined_tags in (None, {}, {"hpc-cost": {}}, {"other": {"User": "keep"}}):
+                for local_scratch in (False, True):
+                    with self.subTest(source_tags=source_tags, source_defined_tags=source_defined_tags,
+                                      local_scratch=local_scratch):
+                        details = self.launch(source_tags, local_scratch=local_scratch,
+                                              source_defined_tags=source_defined_tags)
+                        self.assertEqual(details.defined_tags["hpc-cost"], {"User": "Management"})
+                        self.assertNotIn("user", details.freeform_tags)
+                        if source_defined_tags and "other" in source_defined_tags:
+                            self.assertEqual(details.defined_tags["other"], {"User": "keep"})
+
+
 class LocalBlockVolumeAttachmentTests(unittest.TestCase):
     def setUp(self):
         self.namespace = load_resize_functions()

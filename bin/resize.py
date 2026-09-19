@@ -8399,6 +8399,11 @@ def getLaunchInstanceDetails(instance,comp_ocid,cn_ocid,new_display_name,local_b
         launchInstanceShapeConfigDetails = oci.core.models.LaunchInstanceShapeConfigDetails(baseline_ocpu_utilization=shape_config.baseline_ocpu_utilization,memory_in_gbs=shape_config.memory_in_gbs,ocpus=shape_config.ocpus)
 
     launch_freeform_tags = dict(instance.freeform_tags or {})
+    # The source node can be running another user's job. A new node has no
+    # allocation yet and must not inherit that user's runtime cost ownership.
+    launch_freeform_tags.pop("user", None)
+    launch_defined_tags = copy.deepcopy(instance.defined_tags or {})
+    launch_defined_tags.setdefault("hpc-cost", {})["User"] = "Management"
     launch_freeform_tags.update({
         LOCAL_BLOCK_VOLUME_TAG_ENABLED: "true" if local_block_volume_config["enabled"] else "false",
         LOCAL_BLOCK_VOLUME_TAG_SIZE: str(local_block_volume_config["size_in_gbs"]),
@@ -8416,6 +8421,7 @@ def getLaunchInstanceDetails(instance,comp_ocid,cn_ocid,new_display_name,local_b
         "metadata": instance.metadata,
         "display_name": new_display_name,
         "freeform_tags": launch_freeform_tags,
+        "defined_tags": launch_defined_tags,
         "create_vnic_details": create_vnic_details,
     }
     if local_block_volume_config["enabled"]:
