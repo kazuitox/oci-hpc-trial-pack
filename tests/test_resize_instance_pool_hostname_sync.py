@@ -437,6 +437,28 @@ class InstancePoolDisplayNameApiTests(unittest.TestCase):
             "render-node-a",
         )
 
+    def test_accepts_primary_vnic_in_shared_subnet_compartment(self):
+        instance = make_instance("ocid1.instance.one", "generated-one")
+        _, calls = self.configure_clients([instance])
+        self.vnic_state[instance.id].compartment_id = (
+            "ocid1.compartment.shared-network"
+        )
+
+        self.namespace["update_instance_pool_display_names"](
+            self.compartment_id,
+            self.pool_id,
+            self.cluster_name,
+            {instance.id: "render-node-a"},
+            max_wait_seconds=0,
+        )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(self.vnic_update_calls), 1)
+        self.assertEqual(
+            self.vnic_state[instance.id].display_name,
+            "render-node-a",
+        )
+
     def test_validates_all_primary_vnics_before_first_mutation(self):
         first = make_instance("ocid1.instance.one", "generated-one")
         second = make_instance("ocid1.instance.two", "generated-two")
@@ -1361,7 +1383,10 @@ class InstancePoolDnsOwnershipMigrationTests(unittest.TestCase):
     def write_cluster_files(self, directory, for_each_value):
         inventory_path = os.path.join(directory, "inventory")
         with open(inventory_path, "w", encoding="utf-8") as inventory_file:
-            inventory_file.write(make_inventory_text(dns_entries="true"))
+            inventory_file.write(
+                make_inventory_text(dns_entries="true")+
+                "cluster_network=false\n"
+            )
         with open(os.path.join(directory, "variables.tf"), "w", encoding="utf-8") as variables:
             variables.write('variable "compute_cluster" { default = false }\n')
         with open(os.path.join(directory, "network.tf"), "w", encoding="utf-8") as network:
@@ -1418,6 +1443,42 @@ class InstancePoolDnsOwnershipMigrationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             inventory_path = self.write_cluster_files(directory, legacy)
+            with open(
+                os.path.join(directory, "terraform.tfstate"),
+                "w",
+                encoding="utf-8",
+            ) as state_file:
+                json.dump(
+                    {
+                        "resources": [{
+                            "mode": "managed",
+                            "type": "oci_dns_rrset",
+                            "name": "rrset-cluster-network-OCI",
+                            "instances": [{
+                                "index_key": "0",
+                                "attributes": {
+                                    "zone_name_or_id": "ocid1.dns-zone.test",
+                                    "domain": (
+                                        "generated-one."
+                                        "batch-1-standard.local"
+                                    ),
+                                    "rtype": "A",
+                                    "scope": "PRIVATE",
+                                    "items": [{
+                                        "domain": (
+                                            "generated-one."
+                                            "batch-1-standard.local"
+                                        ),
+                                        "rdata": "10.0.0.10",
+                                        "rtype": "A",
+                                        "ttl": 3600,
+                                    }],
+                                },
+                            }],
+                        }],
+                    },
+                    state_file,
+                )
             self.configure_dns()
             with mock.patch.object(
                 self.namespace["subprocess"],
@@ -1444,14 +1505,14 @@ class InstancePoolDnsOwnershipMigrationTests(unittest.TestCase):
             ](inventory_path)
 
         self.assertTrue(changed)
-        self.assertIn("var.cluster_network || var.compute_cluster", migrated)
+        self.assertIn("var.dns_entries && var.compute_cluster", migrated)
         self.assertEqual(calls[1][:3], ["terraform", "state", "rm"])
         self.assertEqual(
             ownership["rrsets"][0]["domain"],
             "generated-one.batch-1-standard.local",
         )
 
-    def test_new_cluster_marker_avoids_nested_terraform_state_commands(self):
+    def test_v1_instance_pool_marker_upgrades_without_nested_terraform_state_commands(self):
         current = (
             "var.dns_entries && (var.cluster_network || var.compute_cluster) ? "
             "toset([for v in range(var.node_count) : tostring(v)]) : []"
@@ -1472,7 +1533,18 @@ class InstancePoolDnsOwnershipMigrationTests(unittest.TestCase):
                 changed = self.namespace[
                     "migrate_instance_pool_oci_dns_ownership"
                 ](inventory_path)
-        self.assertFalse(changed)
+            with open(
+                os.path.join(directory, "network.tf"),
+                encoding="utf-8",
+            ) as network_file:
+                migrated = network_file.read()
+            version_two_marker = os.path.join(
+                directory,
+                self.namespace["MANAGED_POOL_DNS_OWNERSHIP_MARKER_FILENAME"],
+            )
+            self.assertTrue(os.path.isfile(version_two_marker))
+        self.assertTrue(changed)
+        self.assertIn("var.dns_entries && var.compute_cluster", migrated)
 
 
 class InstancePoolSynchronizationTests(unittest.TestCase):
@@ -2837,11 +2909,14 @@ class InstancePoolNameWiringTests(unittest.TestCase):
         self.assertGreaterEqual(len(calls), 1)
         for call in calls:
             self.assertEqual(len(call.args), 4)
-            self.assertEqual(
-                [argument.id for argument in [call.args[0], *call.args[2:]]],
-                ["comp_ocid", "inventory", "cluster_name"],
+            first, second, third, fourth = call.args
+            self.assertIn(first.id, ["comp_ocid", "compartment_id"])
+            self.assertIn(third.id, ["inventory", "inventory_path"])
+            self.assertIn(fourth.id, ["cluster_name", "expected_cluster_name"])
+            self.assertIn(
+                getattr(second, "id", getattr(second, "attr", None)),
+                ["current_instance_pool_id", "instance_pool_id", "id"],
             )
-            self.assertIn(call.args[1].id, ["cn_ocid", "current_ipa_ocid"])
 
     def test_terraform_does_not_predict_final_os_hostname(self):
         combined = self.locals+self.controller_update+self.inventory_template
@@ -2856,10 +2931,10 @@ class InstancePoolNameWiringTests(unittest.TestCase):
             "ansible-playbook $playbooks_path/new_nodes.yml"
         )
         sync = self.configure_autoscaling.index(
-            "synchronize_instance_pool_names_and_monitoring", playbook
+            "synchronize_managed_pool_names_and_monitoring", playbook
         )
         sync_helper = self.configure_autoscaling.split(
-            "synchronize_instance_pool_names_and_monitoring()", 1
+            "synchronize_managed_pool_names_and_monitoring()", 1
         )[1].split("\n}\n", 1)[0]
         self.assertLess(prepare, playbook)
         self.assertLess(playbook, sync)
@@ -2868,19 +2943,19 @@ class InstancePoolNameWiringTests(unittest.TestCase):
             sync_helper.index("--reconcile-monitoring"),
         )
 
-    def test_initial_sync_is_gated_to_instance_pool_before_oci_lookup(self):
+    def test_initial_sync_is_gated_to_managed_pool_before_oci_lookup(self):
         sync = self.configure_autoscaling.index("sync_instance_pool_names")
         gating = self.configure_autoscaling[:sync]
         self.assertIn("cluster_network", gating)
         self.assertIn('variable "compute_cluster"', gating)
-        self.assertIn("is_autoscaling_instance_pool_deployment", gating)
+        self.assertIn("is_autoscaling_managed_pool_deployment", gating)
 
     def test_initial_retry_resumes_pending_plan_before_ansible(self):
         pending = self.configure_autoscaling.index(
             ".instance-pool-hostname-sync.json"
         )
         resume = self.configure_autoscaling.index(
-            "synchronize_instance_pool_names_and_monitoring", pending
+            "synchronize_managed_pool_names_and_monitoring", pending
         )
         prepare = self.configure_autoscaling.index("prepare_local_block_volume")
         playbook = self.configure_autoscaling.index(
@@ -2910,7 +2985,7 @@ class InstancePoolNameWiringTests(unittest.TestCase):
             'resource "oci_dns_rrset" "rrset-cluster-network-SLURM"', 1
         )[0]
         self.assertIn(
-            "var.dns_entries && (var.cluster_network || var.compute_cluster)",
+            "var.dns_entries && var.compute_cluster",
             oci_rrset,
         )
 
@@ -2927,19 +3002,19 @@ class InstancePoolNameWiringTests(unittest.TestCase):
         add = self.resize.split("def add_reconfigure", 1)[1].split("def reconfigure", 1)[0]
         reconfigure = self.resize.split("def reconfigure", 1)[1].split("def getreachable", 1)[0]
         for body in (add, reconfigure):
-            self.assertIn("synchronize_instance_pool_names", body)
-            self.assertLess(body.index("update_cluster("), body.index("synchronize_instance_pool_names"))
+            self.assertIn("synchronize_autoscaling_managed_pool_names", body)
+            self.assertLess(body.index("update_cluster("), body.index("synchronize_autoscaling_managed_pool_names"))
             self.assertRegex(
                 body,
-                r"(?s)if update_flag\s*==\s*0:.*?synchronize_instance_pool_names",
+                r"(?s)if update_flag\s*==\s*0:.*?synchronize_autoscaling_managed_pool_names",
             )
 
-    def test_cli_is_gated_to_autoscaling_instance_pool_only(self):
+    def test_cli_is_gated_to_autoscaling_managed_pools_only(self):
         cli = self.resize.split("if args.mode == 'sync_instance_pool_names':", 1)[1].split(
             "if CN != \"CC\"", 1
         )[0]
-        self.assertIn('if CN != "IP" or not autoscaling:', cli)
-        self.assertIn("synchronize_instance_pool_names(", cli)
+        self.assertIn('if CN not in ["IP", "CN"] or not autoscaling:', cli)
+        self.assertIn("synchronize_autoscaling_managed_pool_names(", cli)
 
     def test_name_sync_updates_primary_vnic_display_name_only(self):
         update_function = next(
@@ -2995,9 +3070,9 @@ class InstancePoolNameWiringTests(unittest.TestCase):
         )
         self.assertIn("{{ item }}.local.vcn {{ item }}", refresh_template)
 
-    def test_instance_pool_dns_cleanup_blocks_terraform_destroy_on_failure(self):
+    def test_managed_pool_dns_cleanup_blocks_terraform_destroy_on_failure(self):
         cleanup_guard = self.delete_cluster.index(
-            "Instance Pool DNS cleanup failed; Terraform destroy was not started"
+            "Managed pool DNS cleanup failed; Terraform destroy was not started"
         )
         terraform_destroy = self.delete_cluster.index(
             "terraform destroy -auto-approve -parallelism 1"
@@ -3006,7 +3081,7 @@ class InstancePoolNameWiringTests(unittest.TestCase):
 
     def test_monitoring_rows_are_reconciled_by_ocid(self):
         function = self.resize_shell.split(
-            "reconcile_instance_pool_monitoring()", 1
+            "reconcile_managed_pool_monitoring()", 1
         )[1].split("\n}\n", 1)[0]
         self.assertIn("list --monitoring-output", function)
         self.assertIn("EXPECTED_SIZE", function)
@@ -3016,7 +3091,7 @@ class InstancePoolNameWiringTests(unittest.TestCase):
 
     def test_monitoring_checks_existing_ocid_before_claiming_placeholder(self):
         function = self.resize_shell.split(
-            "reconcile_instance_pool_monitoring()", 1
+            "reconcile_managed_pool_monitoring()", 1
         )[1].split("\n}\n", 1)[0]
         guard = "SET @oci_hpc_node_exists = (SELECT COUNT(*) FROM cluster_log.nodes WHERE node_OCID='${ocid}');"
         claim = (
@@ -3042,7 +3117,7 @@ class InstancePoolNameWiringTests(unittest.TestCase):
 
     def test_monitoring_releases_names_before_atomic_reassignment(self):
         function = self.resize_shell.split(
-            "reconcile_instance_pool_monitoring()", 1
+            "reconcile_managed_pool_monitoring()", 1
         )[1].split("\n}\n", 1)[0]
         release = 'UPDATE cluster_log.nodes SET hostname=NULL WHERE node_OCID='
         assign = "UPDATE cluster_log.nodes SET cluster_id='$cluster_id',hostname='${hostname}'"
@@ -3055,7 +3130,7 @@ class InstancePoolNameWiringTests(unittest.TestCase):
             "if [ $status -eq 0 ]", 1
         )[1].split("else\n    echo \"Could not resize cluster", 1)[0]
         monitoring_failure = success_branch.split(
-            'if ! reconcile_instance_pool_monitoring "$cluster_name"', 1
+            'if ! reconcile_managed_pool_monitoring "$cluster_name"', 1
         )[1].split("fi", 1)[0]
         self.assertNotIn("status=1", monitoring_failure)
         self.assertIn("--reconcile-monitoring", monitoring_failure)
@@ -3196,7 +3271,7 @@ class InstancePoolNameWiringTests(unittest.TestCase):
         self.assertLess(refresh, finalization)
         self.assertIn("ipa_ocid", refresh_block)
         self.assertIn(
-            'expected_display_name=cluster_name if CN == "IP" else None',
+            'expected_display_name=cluster_name',
             refresh_block,
         )
 

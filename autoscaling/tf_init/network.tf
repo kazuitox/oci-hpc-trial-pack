@@ -167,10 +167,10 @@ resource "oci_core_subnet" "private-subnet" {
 
 
 resource "oci_dns_rrset" "rrset-cluster-network-OCI" {
-  # Instance Pool OCI-name records follow the final post-Ansible OS hostname
-  # and are therefore owned by resize.py.  Keep Terraform ownership unchanged
-  # for Cluster Network and Compute Cluster deployments.
-  for_each        = var.dns_entries && (var.cluster_network || var.compute_cluster) ? toset([for v in range(var.node_count) : tostring(v)]) : []
+  # Managed pool OCI-name records follow the final post-Ansible OS hostname
+  # and are therefore owned by resize.py. Compute Cluster instances keep their
+  # Terraform-owned records because they are not part of managed-pool syncing.
+  for_each        = var.dns_entries && var.compute_cluster ? toset([for v in range(var.node_count) : tostring(v)]) : []
   zone_name_or_id = data.oci_dns_zones.dns_zones.zones[0].id
   domain          = "${local.cluster_instances_names[tonumber(each.key)]}.${var.zone_name}"
   rtype           = "A"

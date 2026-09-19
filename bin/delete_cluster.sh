@@ -21,13 +21,13 @@ autoscaling_folder=$folder/../autoscaling
 monitoring_folder=$folder/../monitoring
 logs_folder=$folder/../logs
 
-is_autoscaling_instance_pool_deployment()
+is_autoscaling_managed_pool_deployment()
 {
   local variables_file=$autoscaling_folder/clusters/$1/variables.tf
   local inventory_file=$autoscaling_folder/clusters/$1/inventory
   [ -f "$variables_file" ] \
     && [ -f "$inventory_file" ] \
-    && grep -Eq '^[[:space:]]*cluster_network[[:space:]]*=[[:space:]]*false[[:space:]]*$' "$inventory_file" \
+    && grep -Eq '^[[:space:]]*cluster_network[[:space:]]*=[[:space:]]*(true|false)[[:space:]]*$' "$inventory_file" \
     && ! grep -Eq '^variable "compute_cluster".*default[[:space:]]*=[[:space:]]*true' "$variables_file"
 }
 
@@ -82,9 +82,9 @@ else
   else
     status_compute_cleanup=0
   fi
-  if [ $status_compute_cleanup -ne 0 ] && is_autoscaling_instance_pool_deployment "$1"
+  if [ $status_compute_cleanup -ne 0 ] && is_autoscaling_managed_pool_deployment "$1"
   then
-    echo "Instance Pool DNS cleanup failed; Terraform destroy was not started" >> $logs_folder/delete_${cluster_id}.log 2>&1
+    echo "Managed pool DNS cleanup failed; Terraform destroy was not started" >> $logs_folder/delete_${cluster_id}.log 2>&1
     rm -f currently_destroying
     if [ -f $monitoring_folder/activated ]
     then

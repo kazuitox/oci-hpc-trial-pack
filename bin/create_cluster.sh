@@ -182,11 +182,11 @@ do
     then
       ocid=`tail $logs_folder/create_$2_${date}.log | grep "cluster_ocid =" | awk '{print $3}'`
       mysql -u $ENV_MYSQL_USER -p$ENV_MYSQL_PASS -e "use $ENV_MYSQL_DATABASE_NAME; UPDATE cluster_log.clusters SET cluster_OCID='${ocid:1:-1}',created='$end_timestamp',state='running',creation_time=SEC_TO_TIME($runtime) WHERE id='$2_${date}';" >> $logs_folder/create_$2_${date}.log 2>&1
-      if [ "$cluster_network" != "true" ] && [ "$compute_cluster" != "true" ]
+      if [ "$compute_cluster" != "true" ]
       then
         if ! bash "$folder/resize.sh" --cluster_name "$2" --reconcile-monitoring >> $logs_folder/create_$2_${date}.log 2>&1
         then
-          echo "Failed to reconcile Instance Pool monitoring with final OS hostnames" >> $logs_folder/create_$2_${date}.log
+          echo "Failed to reconcile managed pool monitoring with final OS hostnames" >> $logs_folder/create_$2_${date}.log
         fi
       else
         ips=`tail $logs_folder/create_$2_${date}.log | grep "private_ips =" | awk '{print $3}'`
