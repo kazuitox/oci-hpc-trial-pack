@@ -72,8 +72,9 @@ class ComputeClusterLaunchCostTagTests(unittest.TestCase):
             metadata={"ssh_authorized_keys": "test-key"},
         )
 
-    def launch(self, source_tags, local_scratch=False):
+    def launch(self, source_tags, local_scratch=False, source_defined_tags=None):
         self.instance.freeform_tags = source_tags
+        self.instance.defined_tags = source_defined_tags
         return self.namespace["getLaunchInstanceDetails"](
             self.instance,
             "ocid1.compartment.test",
@@ -97,18 +98,42 @@ class ComputeClusterLaunchCostTagTests(unittest.TestCase):
                     "parent_cluster": "test-cluster",
                     "customer": "research",
                 }
-                details = self.launch(source_tags, local_scratch=local_scratch)
-                self.assertEqual(details.freeform_tags["user"], "Management")
+                source_defined_tags = {
+                    "hpc-cost": {"User": "alice", "Project": "research", "user": "keep"},
+                    "other": {"User": "keep", "CostCenter": 123},
+                }
+                details = self.launch(source_tags, local_scratch=local_scratch,
+                                      source_defined_tags=source_defined_tags)
+                self.assertEqual(details.defined_tags, {
+                    "hpc-cost": {"User": "Management", "Project": "research", "user": "keep"},
+                    "other": {"User": "keep", "CostCenter": 123},
+                })
+                self.assertNotIn("user", details.freeform_tags)
                 self.assertEqual(details.freeform_tags["customer"], "research")
+                self.assertEqual(details.freeform_tags["cluster_name"], "test-cluster")
                 self.assertEqual(details.freeform_tags["parent_cluster"], "test-cluster")
                 self.assertEqual(source_tags["user"], "alice")
+                self.assertEqual(source_defined_tags["hpc-cost"]["User"], "alice")
                 self.assertIsNot(details.freeform_tags, source_tags)
+                self.assertIsNot(details.defined_tags, source_defined_tags)
+                for namespace in source_defined_tags:
+                    self.assertIsNot(details.defined_tags[namespace], source_defined_tags[namespace])
+                self.assertEqual(details.freeform_tags["oci_hpc_local_block_volume"],
+                                 "true" if local_scratch else "false")
+                self.assertEqual(hasattr(details, "launch_volume_attachments"), local_scratch)
 
     def test_legacy_source_without_tags_still_starts_as_management(self):
         for source_tags in (None, {}, {"parent_cluster": "test-cluster"}):
-            with self.subTest(source_tags=source_tags):
-                details = self.launch(source_tags)
-                self.assertEqual(details.freeform_tags["user"], "Management")
+            for source_defined_tags in (None, {}, {"hpc-cost": {}}, {"other": {"User": "keep"}}):
+                for local_scratch in (False, True):
+                    with self.subTest(source_tags=source_tags, source_defined_tags=source_defined_tags,
+                                      local_scratch=local_scratch):
+                        details = self.launch(source_tags, local_scratch=local_scratch,
+                                              source_defined_tags=source_defined_tags)
+                        self.assertEqual(details.defined_tags["hpc-cost"], {"User": "Management"})
+                        self.assertNotIn("user", details.freeform_tags)
+                        if source_defined_tags and "other" in source_defined_tags:
+                            self.assertEqual(details.defined_tags["other"], {"User": "keep"})
 
 
 class LocalBlockVolumeAttachmentTests(unittest.TestCase):

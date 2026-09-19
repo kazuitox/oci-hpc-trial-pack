@@ -73,7 +73,8 @@ class SlurmUserTagsConfigurationTests(unittest.TestCase):
         self.assertTrue(config["enabled"])
         self.assertEqual(config["state_dir"], "/mnt/shared cluster/oci-user-tags")
         self.assertEqual(config["local_state_dir"], "/var/lib/slurm-oci-user-tags")
-        self.assertEqual(config["tag_key"], "user")
+        self.assertEqual(config["tag_namespace"], "hpc-cost")
+        self.assertEqual(config["tag_key"], "User")
         self.assertEqual(config["management_value"], "Management")
         self.assertEqual(config["oci_cli"], "/opt/slurm-oci-user-tags/venv/bin/oci")
         self.assertNotIn("job_tag", config)
@@ -167,6 +168,71 @@ class SlurmUserTagsConfigurationTests(unittest.TestCase):
         self.assertTrue(schema["variables"]["slurm_user_tags_enabled"]["default"])
         defaults = yaml.safe_load((ROLE / "defaults/main.yml").read_text())
         self.assertTrue(defaults["slurm_user_tags_enabled"])
+
+    def test_defined_tag_definition_uses_target_compartment_and_static_values(self):
+        source = (ROOT / "cost-tags.tf").read_text()
+        namespace = source.split('resource "oci_identity_tag_namespace" "hpc_cost" {', 1)[1].split("\n}", 1)[0]
+        tag = source.split('resource "oci_identity_tag" "hpc_cost_user" {', 1)[1].split("\n}", 1)[0]
+        self.assertRegex(namespace, r"compartment_id\s*=\s*var.targetCompartment")
+        self.assertRegex(namespace, r'name\s*=\s*"hpc-cost"')
+        self.assertRegex(tag, r'name\s*=\s*"User"')
+        self.assertRegex(tag, r"tag_namespace_id\s*=\s*oci_identity_tag_namespace.hpc_cost.id")
+        for definition in (namespace, tag):
+            self.assertRegex(definition, r"provider\s*=\s*oci.home")
+            self.assertRegex(definition, r'description\s*=\s*"[A-Za-z][^"\n]+"')
+            # Disabling runtime updates must not destroy tag definitions or
+            # prevent the existing unconditional initial tag from being applied.
+            self.assertNotRegex(definition, r"\b(count|for_each)\s*=")
+        # No enum restrictions: newly created Slurm users must work immediately.
+        self.assertNotRegex(tag, r"\bvalidator\s*\{")
+
+    def test_initial_and_dynamic_nodes_use_the_same_defined_tag(self):
+        initial = (ROOT / "cost-tags.tf").read_text()
+        self.assertIn('${oci_identity_tag_namespace.hpc_cost.name}.${oci_identity_tag.hpc_cost_user.name}', initial)
+        self.assertRegex(initial, r"user_cost_tags\s*=\s*\{\s*\(local.user_cost_tag_key\)\s*=\s*var.tags\s*\}")
+        dynamic = (ROOT / "autoscaling/tf_init/cost-tags.tf").read_text()
+        self.assertRegex(dynamic, r'user_cost_tags\s*=\s*\{\s*"hpc-cost.User"\s*=\s*var.tags\s*\}')
+        self.assertNotIn('resource "oci_identity_', dynamic)
+        for base in (ROOT, ROOT / "autoscaling/tf_init"):
+            for filename in (
+                "compute-nodes.tf", "compute-cluster.tf", "cluster-network.tf",
+                "instance-pool.tf", "cluster-network-configuration.tf",
+                "instance-pool-configuration.tf",
+            ):
+                with self.subTest(base=base.name, filename=filename):
+                    source = (base / filename).read_text()
+                    self.assertRegex(source, r"defined_tags\s*=\s*local.user_cost_tags")
+                    self.assertNotRegex(source, r'"user"\s*=\s*var.tags')
+                    if filename.endswith("configuration.tf"):
+                        launch = source.split("launch_details {", 1)[1]
+                        self.assertRegex(launch, r"defined_tags\s*=\s*local.user_cost_tags")
+                        # Launch tags replace the immutable configuration. A
+                        # pool still using the old one prevents its deletion.
+                        self.assertRegex(source, r"lifecycle\s*\{\s*(?:#[^\n]*\n\s*)?create_before_destroy\s*=\s*true")
+
+    def test_terraform_preserves_runtime_defined_tag_changes_only_for_user(self):
+        for filename in ("compute-nodes.tf", "autoscaling/tf_init/compute-nodes.tf"):
+            with self.subTest(filename=filename):
+                source = (ROOT / filename).read_text()
+                ignored = source.split("ignore_changes = [", 1)[1].split("\n    ]", 1)[0]
+                self.assertIn('defined_tags["hpc-cost.User"]', ignored)
+                self.assertNotRegex(ignored, r"(?m)^\s*defined_tags\s*,")
+                self.assertNotIn('freeform_tags["user"]', ignored)
+
+    def test_defined_tag_migration_redeploys_both_controllers_and_playbooks(self):
+        for filename in ("controller.tf", "slurm_ha.tf"):
+            source = (ROOT / filename).read_text()
+            # The file-copy resource and Ansible resource must both rerun, and
+            # wait for the tag definition through the local value's reference.
+            self.assertEqual(len(re.findall(r"user_cost_tag_key\s*=\s*local.user_cost_tag_key", source)), 2)
+
+    def test_defined_tag_management_always_resolves_the_home_region(self):
+        data = (ROOT / "data.tf").read_text()
+        for kind, name in (("oci_identity_tenancy", "tenancy"), ("oci_identity_regions", "regions")):
+            block = data.split('data "{}" "{}" {{'.format(kind, name), 1)[1].split("}", 1)[0]
+            self.assertNotRegex(block, r"\bcount\s*=")
+        local = (ROOT / "locals.tf").read_text()
+        self.assertRegex(local, r"home_region\s*=\s*local.region_map\[data.oci_identity_tenancy.tenancy.home_region_key\]")
 
     def test_controller_and_autoscaling_share_the_selected_slurm_state_path(self):
         for filename in ("controller.tf", "slurm_ha.tf"):

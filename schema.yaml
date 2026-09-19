@@ -1888,9 +1888,9 @@ variables:
     description: Autoscaling に必要です
   slurm_user_tags_enabled:
     type: boolean
-    title: Slurm の利用者を計算ノードの user タグへ反映
+    title: Slurm の利用者を計算ノードの hpc-cost.User タグへ反映
     default: true
-    description: ジョブ実行中は Slurm のユーザー名、未使用時は Management を設定します。OCI Cost Analysis の利用者別表示を補助します。
+    description: ジョブ実行中は Slurm のユーザー名、未使用時は Management を設定します。Defined タグ hpc-cost.User を使用し、OCI Cost Analysis の利用者別表示を補助します。
     visible: ${slurm}
   slurm_job_notifications_enabled:
     type: boolean

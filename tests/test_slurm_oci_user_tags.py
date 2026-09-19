@@ -39,12 +39,35 @@ class UserTagTests(unittest.TestCase):
     def record(self):
         return self.module.read_json(self.path)
 
-    def get_response(self, user="Management", **tags):
+    def get_response(self, user="Management", cost_tags=None, defined_tags=None, **tags):
+        defined_tags = dict(defined_tags or {})
+        defined_tags["hpc-cost"] = dict(cost_tags or {}, User=user)
         return json.dumps({"data": {"id": self.identity["instance_id"],
-                                    "freeform-tags": dict(tags, user=user)}, "etag": "version-1"})
+                                    "defined-tags": defined_tags,
+                                    "freeform-tags": dict(tags, user="legacy-owner")}, "etag": "version-1"})
 
     def updated_tag(self, command):
-        return json.loads(command[command.index("--freeform-tags") + 1])["user"]
+        return json.loads(command[command.index("--defined-tags") + 1])["hpc-cost"]["User"]
+
+    def test_config_defaults_and_legacy_key_target_only_hpc_cost_user(self):
+        path = os.path.join(self.directory.name, "config.json")
+        for fields in ({}, {"tag_key": "user"}, {"tag_key": "User"},
+                       {"tag_namespace": "hpc-cost", "tag_key": "User"}):
+            with self.subTest(fields=fields):
+                self.module.atomic_json(path, dict(self.config, **fields))
+                config = self.module.load_config(path)
+                self.assertEqual(config["tag_namespace"], "hpc-cost")
+                self.assertEqual(config["tag_key"], "User")
+
+    def test_config_rejects_wrong_defined_tag_target(self):
+        path = os.path.join(self.directory.name, "config.json")
+        for fields in ({"tag_namespace": "other"}, {"tag_key": "Other"},
+                       {"tag_namespace": "hpc-cost", "tag_key": "user"},
+                       {"tag_namespace": None}, {"tag_key": None}):
+            with self.subTest(fields=fields):
+                self.module.atomic_json(path, dict(self.config, **fields))
+                with self.assertRaises(ValueError):
+                    self.module.load_config(path)
 
     def test_hooks_record_owner_and_utc_history_without_external_commands(self):
         with mock.patch.object(self.module, "run") as run:
@@ -84,11 +107,14 @@ class UserTagTests(unittest.TestCase):
         self.assertEqual(self.module.desired_owner(self.record()), "alice")
         self.event("prolog", job="44", user="bob")
         self.assertIsNone(self.module.desired_owner(self.record()))
-        with mock.patch.object(self.module, "run", side_effect=[self.get_response(user="alice", cluster_name="trial"), "{}"]) as run:
+        response = self.get_response(user="alice", cluster_name="trial", cost_tags={"Project": "keep"},
+                                     defined_tags={"other": {"User": "keep"}})
+        with mock.patch.object(self.module, "run", side_effect=[response, "{}"]) as run:
             self.module.apply_latest(self.config, self.path)
         command = run.call_args.args[0]
-        tags = json.loads(command[command.index("--freeform-tags") + 1])
-        self.assertEqual(tags, {"cluster_name": "trial"})
+        tags = json.loads(command[command.index("--defined-tags") + 1])
+        self.assertEqual(tags, {"hpc-cost": {"Project": "keep"}, "other": {"User": "keep"}})
+        self.assertNotIn("--freeform-tags", command)
         self.assertIsNone(self.record()["applied_owner"])
         self.event("epilog", job="44", user="bob")
         self.assertEqual(self.module.desired_owner(self.record()), "alice")
@@ -149,16 +175,71 @@ class UserTagTests(unittest.TestCase):
 
     def test_oci_update_preserves_unrelated_tags_uses_etag_and_no_job_tag(self):
         self.event("prolog")
-        with mock.patch.object(self.module, "run", side_effect=[self.get_response(cluster_name="trial", custom="keep"), "{}"]) as run:
+        response = self.get_response(cluster_name="trial", custom="keep", cost_tags={"Project": "keep", "user": "keep"},
+                                     defined_tags={"other": {"User": "keep", "CostCenter": 123}})
+        with mock.patch.object(self.module, "run", side_effect=[response, "{}"]) as run:
             self.module.apply_latest(self.config, self.path)
         command, timeout = run.call_args.args
-        tags = json.loads(command[command.index("--freeform-tags") + 1])
-        self.assertEqual(tags, {"user": "alice", "cluster_name": "trial", "custom": "keep"})
+        tags = json.loads(command[command.index("--defined-tags") + 1])
+        self.assertEqual(tags, {"hpc-cost": {"User": "alice", "Project": "keep", "user": "keep"},
+                                "other": {"User": "keep", "CostCenter": 123}})
         self.assertEqual(command[command.index("--if-match") + 1], "version-1")
         self.assertEqual(command[command.index("--auth") + 1], "instance_principal")
-        self.assertNotIn("--defined-tags", command)
+        self.assertNotIn("--freeform-tags", command)
         self.assertLessEqual(timeout, 10)
         self.assertEqual(self.record()["applied_owner"], "alice")
+        self.assertEqual(self.record()["applied_tag"], "hpc-cost.User")
+
+    def test_first_defined_tag_is_added_when_instance_has_no_defined_tags(self):
+        self.event("prolog")
+        response = json.loads(self.get_response())
+        response["data"]["defined-tags"] = {}
+        with mock.patch.object(self.module, "run", side_effect=[json.dumps(response), "{}"]) as run:
+            self.module.apply_latest(self.config, self.path)
+        command = run.call_args.args[0]
+        self.assertEqual(json.loads(command[command.index("--defined-tags") + 1]),
+                         {"hpc-cost": {"User": "alice"}})
+
+    def test_ambiguous_users_remove_only_key_even_if_namespace_becomes_empty(self):
+        self.event("prolog")
+        self.event("prolog", job="43", user="bob")
+        response = self.get_response(user="alice", defined_tags={"other": {"User": "keep"}})
+        with mock.patch.object(self.module, "run", side_effect=[response, "{}"]) as run:
+            self.module.apply_latest(self.config, self.path)
+        command = run.call_args.args[0]
+        self.assertEqual(json.loads(command[command.index("--defined-tags") + 1]),
+                         {"other": {"User": "keep"}})
+        self.assertNotIn("--freeform-tags", command)
+
+    def test_ambiguous_users_without_user_tag_do_not_write_tags(self):
+        self.event("prolog")
+        self.event("prolog", job="43", user="bob")
+        response = json.loads(self.get_response())
+        response["data"]["defined-tags"] = {"hpc-cost": {"Project": "keep"}}
+        with mock.patch.object(self.module, "run", return_value=json.dumps(response)) as run:
+            self.module.apply_latest(self.config, self.path)
+        self.assertEqual(run.call_count, 1)
+        self.assertIsNone(self.record()["applied_owner"])
+
+    def test_idle_node_restores_management_defined_tag(self):
+        self.event("prolog")
+        self.event("epilog")
+        with mock.patch.object(self.module, "run", side_effect=[self.get_response(user="alice"), "{}"]) as run:
+            self.module.apply_latest(self.config, self.path)
+        self.assertEqual(self.updated_tag(run.call_args.args[0]), "Management")
+
+    def test_old_freeform_applied_record_is_reconciled_before_drift_interval(self):
+        record = self.record()
+        record.update(applied_revision=record["revision"], checked_at=self.module.time.time())
+        self.module.atomic_json(self.path, record)
+        self.assertTrue(self.module.needs_attempt(self.config, record))
+        response = json.loads(self.get_response())
+        response["data"]["defined-tags"] = {}
+        with mock.patch.object(self.module, "run", side_effect=[json.dumps(response), "{}"]) as run:
+            self.module.apply_latest(self.config, self.path)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(self.updated_tag(run.call_args.args[0]), "Management")
+        self.assertFalse(self.module.needs_attempt(self.config, self.record()))
 
     def test_revision_changed_during_get_never_writes_old_owner(self):
         self.event("prolog")
@@ -216,13 +297,35 @@ class UserTagTests(unittest.TestCase):
             self.assertEqual(run.call_count, 2)
 
     def test_missing_etag_or_wrong_instance_never_updates(self):
-        for response in ({"data": {"id": self.identity["instance_id"], "freeform-tags": {}}},
-                         {"data": {"id": "ocid1.instance.wrong", "freeform-tags": {}}, "etag": "v1"}):
+        for response in ({"data": {"id": self.identity["instance_id"], "defined-tags": {}}},
+                         {"data": {"id": "ocid1.instance.wrong", "defined-tags": {}}, "etag": "v1"}):
             with self.subTest(response=response):
                 with mock.patch.object(self.module, "run", return_value=json.dumps(response)) as run:
                     with self.assertRaises(ValueError):
                         self.module.apply_latest(self.config, self.path)
                     self.assertEqual(run.call_count, 1)
+
+    def test_malformed_defined_tags_or_response_never_updates(self):
+        responses = [None, [], {"data": None, "etag": "v1"}]
+        for tags in (None, [], "bad", {"hpc-cost": None}, {"hpc-cost": []},
+                     {"other": "bad"}, {"": {"User": "bad"}}):
+            response = json.loads(self.get_response())
+            response["data"]["defined-tags"] = tags
+            responses.append(response)
+        response = json.loads(self.get_response())
+        del response["data"]["defined-tags"]
+        responses.append(response)
+        for etag in (None, "", 42, {}, []):
+            response = json.loads(self.get_response())
+            response["etag"] = etag
+            responses.append(response)
+        for response in responses:
+            with self.subTest(response=response):
+                with mock.patch.object(self.module, "run", return_value=json.dumps(response)) as run:
+                    with self.assertRaises(ValueError):
+                        self.module.apply_latest(self.config, self.path)
+                self.assertEqual(run.call_count, 1)
+                self.assertNotIn("applied_revision", self.record())
 
     def test_only_valid_trusted_compute_records_are_registered(self):
         bad = dict(self.record(), instance_id="ocid1.volume.oc1.example")

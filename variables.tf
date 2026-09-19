@@ -176,7 +176,7 @@ variable "slurm_ha" { default = false }
 variable "slurm_user_tags_enabled" {
   type        = bool
   default     = true
-  description = "Update compute node user tags from Slurm job ownership; idle nodes use Management."
+  description = "Update compute node hpc-cost.User defined tags from Slurm job ownership; idle nodes use Management."
 }
 
 variable "slurm_job_notifications_enabled" {

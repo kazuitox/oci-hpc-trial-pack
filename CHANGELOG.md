@@ -6,7 +6,7 @@
 
 ### Added
 
-- SlurmのProlog／Epilogから計算ノードの利用者を記録し、OCIの`user`タグをユーザー名と`Management`の間で切り替える機能を追加しました。コントローラーでの再試行とSlurm割当状態の照合に対応します。
+- SlurmのProlog／Epilogから計算ノードの利用者を記録し、OCIのDefinedタグ`hpc-cost.User`をユーザー名と`Management`の間で切り替える機能を追加しました。コントローラーでの再試行とSlurm割当状態の照合に対応します。
 - Open OnDemandに「04 OpenComposer」メニューを追加し、「Slurmジョブ」と「History」をOpen OnDemandのヘッダー内で利用できるようにしました。
 - OpenComposerの実行プロファイルを非MPI、MPI、OpenMPで切り替えられるようにし、Platform MPI v9.xとプロファイル別のCPU・タスク数指定を追加しました。
 - Slurmの`BEGIN` / `END` / `FAIL`イベントをOCI Notifications経由でメール送信する機能を追加しました。
@@ -15,6 +15,7 @@
 
 ### Changed
 
+- Slurmユーザー別コストタグをfreeformタグ`user`からDefinedタグ`hpc-cost.User`へ変更しました。デプロイ先コンパートメントへ名前空間とStatic valueのキーを作成し、初期ノード・Autoscalingノード・実行中のタグ更新で同じキーを使用します。ワーカーは他のDefinedタグとfreeformタグを保持します。タグ定義をホームリージョンで作成するため、IAM自動作成が無効でもテナンシとホームリージョンの参照が必要です。
 - ノード作成時のタグの既定値を`Management`に変更し、既存ノードから複製する場合も実行中ユーザーのタグを引き継がないようにしました。
 - 計算ノードのFlex ShapeごとにOCPU数の入力上限を切り替え、E5/E6 Shapeで最大126 OCPUを指定できるようにしました。
 - Slurmジョブ通知メールの本文を、既存項目を維持した固定幅のテキスト表に変更しました。

@@ -41,10 +41,10 @@ resource "oci_core_instance_configuration" "instance_pool_configuration" {
       create_vnic_details {
       }
       display_name = local.cluster_name
+      defined_tags = local.user_cost_tags
       freeform_tags = {
         "cluster_name"                     = local.cluster_name
         "parent_cluster"                   = local.cluster_name
-        "user"                             = var.tags
         "oci_hpc_local_block_volume"       = tostring(tobool(var.use_local_block_volume))
         "oci_hpc_local_block_volume_size"  = tostring(tonumber(var.local_block_volume_size))
         "oci_hpc_local_block_volume_vpus"  = tostring(tonumber(split(".", var.local_block_volume_performance)[0]))
@@ -113,4 +113,9 @@ resource "oci_core_instance_configuration" "instance_pool_configuration" {
   }
 
   source = "NONE"
+
+  lifecycle {
+    # Pools must switch to the new launch tags before the old configuration is removed.
+    create_before_destroy = true
+  }
 }

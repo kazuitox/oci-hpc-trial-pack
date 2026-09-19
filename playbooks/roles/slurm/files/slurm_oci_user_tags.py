@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record Slurm ownership locally; reconcile the existing OCI user tag centrally."""
+"""Record Slurm ownership locally; reconcile the OCI hpc-cost.User defined tag."""
 
 import argparse
 from contextlib import contextmanager
@@ -24,6 +24,9 @@ ROOT_UID = 0
 LOCK_STALE_SECONDS = 300
 _HELD_LOCKS = {}
 IMDS_URL = "http://169.254.169.254/opc/v2/instance/"
+TAG_NAMESPACE = "hpc-cost"
+TAG_KEY = "User"
+TAG_TARGET = TAG_NAMESPACE + "." + TAG_KEY
 VALID_NODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$")
 VALID_JOB = re.compile(r"^[0-9]+(?:[_.+][0-9]+)*$")
 VALID_REGION = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)+$")
@@ -172,8 +175,14 @@ def load_config(path):
         return config
     if not os.path.isabs(config.get("state_dir", "")):
         raise ValueError("state_dir must be an absolute path")
-    if config.get("tag_key", "user") != "user":
-        raise ValueError("only the existing user tag is supported")
+    # Existing installations omit the namespace and name the old freeform key.
+    # Accept that configuration during upgrades, but always use the defined tag.
+    legacy_tag = "tag_namespace" not in config and config.get("tag_key") == "user"
+    if (config.get("tag_namespace", TAG_NAMESPACE) != TAG_NAMESPACE or
+            (config.get("tag_key", TAG_KEY) != TAG_KEY and not legacy_tag)):
+        raise ValueError("only the hpc-cost.User defined tag is supported")
+    config["tag_namespace"] = TAG_NAMESPACE
+    config["tag_key"] = TAG_KEY
     if config.get("management_value", "Management") != "Management":
         raise ValueError("management_value must be Management")
     for field, default, low, high in (("oci_timeout", 10, 1, 60), ("slurm_timeout", 5, 1, 30),
@@ -460,14 +469,21 @@ def apply_latest(config, path):
     for attempt in range(2):
         record = validate_record(read_json(path))
         owner = desired_owner(record)
-        if (record.get("applied_revision") == record["revision"] and
+        if (record.get("applied_tag") == TAG_TARGET and
+                record.get("applied_revision") == record["revision"] and
                 time.time() - record.get("checked_at", 0) < config.get("drift_check_seconds", 300)):
             return
         response = json.loads(run(oci_command(config, record, "get"), command_timeout(config, "oci_timeout", 10)))
+        if not isinstance(response, dict):
+            raise ValueError("invalid OCI instance response")
         data = response.get("data")
         etag = response.get("etag")
-        if not isinstance(data, dict) or not isinstance(data.get("freeform-tags"), dict) or not etag:
+        if (not isinstance(data, dict) or not isinstance(data.get("defined-tags"), dict) or
+                not isinstance(etag, str) or not etag):
             raise ValueError("OCI instance response is missing tags or ETag")
+        if any(not namespace or not isinstance(values, dict)
+               for namespace, values in data["defined-tags"].items()):
+            raise ValueError("OCI instance response has invalid defined tags")
         if data.get("id") != record["instance_id"]:
             raise ValueError("OCI instance response has an unexpected OCID")
         if data.get("lifecycle-state") in {"TERMINATED", "TERMINATING"}:
@@ -479,24 +495,29 @@ def apply_latest(config, path):
                 history(config, path, {"event": "instance-retired", "instance_id": record["instance_id"],
                                        "lifecycle_state": data["lifecycle-state"]})
             return
-        tags = dict(data["freeform-tags"])
+        tags = {namespace: dict(values) for namespace, values in data["defined-tags"].items()}
+        cost_tags = tags.get(TAG_NAMESPACE, {})
         latest = validate_record(read_json(path))
         if latest["revision"] != record["revision"]:
             continue
-        changed = ("user" in tags) if owner is None else tags.get("user") != owner
+        changed = (TAG_KEY in cost_tags) if owner is None else cost_tags.get(TAG_KEY) != owner
         if changed:
             if owner is None:
-                tags.pop("user", None)
-                log("multiple users share {}; removing ambiguous user tag".format(record["node_name"]))
+                cost_tags.pop(TAG_KEY, None)
+                if not cost_tags:
+                    tags.pop(TAG_NAMESPACE, None)
+                log("multiple users share {}; removing ambiguous hpc-cost.User tag".format(record["node_name"]))
             else:
-                tags["user"] = owner
-            command = oci_command(config, record, "update") + ["--freeform-tags", json.dumps(tags), "--if-match", str(etag), "--force"]
+                cost_tags[TAG_KEY] = owner
+                tags[TAG_NAMESPACE] = cost_tags
+            command = oci_command(config, record, "update") + ["--defined-tags", json.dumps(tags), "--if-match", etag, "--force"]
             run(command, command_timeout(config, "oci_timeout", 10))
         with locked(path + ".lock"):
             latest = validate_record(read_json(path))
             if latest["revision"] != record["revision"]:
                 continue
             latest["applied_revision"] = record["revision"]
+            latest["applied_tag"] = TAG_TARGET
             latest["applied_owner"] = owner
             latest["applied_at"] = utc_now()
             latest["checked_at"] = time.time()
@@ -512,7 +533,8 @@ def needs_attempt(config, record):
     now = time.time()
     if record.get("retired") or record.get("next_attempt_at", 0) > now:
         return False
-    return (record.get("applied_revision") != record["revision"] or
+    return (record.get("applied_tag") != TAG_TARGET or
+            record.get("applied_revision") != record["revision"] or
             now - record.get("checked_at", 0) >= config.get("drift_check_seconds", 300))
 
 

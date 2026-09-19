@@ -104,6 +104,7 @@ resource "null_resource" "controller" {
   depends_on = [oci_core_instance.controller, oci_core_volume_attachment.controller_volume_attachment ] 
   triggers = merge({
     slurm_user_tags_enabled = tostring(var.slurm && var.slurm_user_tags_enabled)
+    user_cost_tag_key       = local.user_cost_tag_key
     controller = oci_core_instance.controller.id
   }, var.slurm_job_notifications_enabled ? {
     slurm_notification_payload = local.slurm_notification_payload_hash
@@ -244,6 +245,7 @@ resource "null_resource" "cluster" {
   ]
   triggers = merge({
     slurm_user_tags_enabled = tostring(var.slurm && var.slurm_user_tags_enabled)
+    user_cost_tag_key       = local.user_cost_tag_key
     cluster_instances           = join(", ", local.cluster_instances_names)
     cluster_instance_ids        = join(", ", local.cluster_instances_ids)
     local_block_volume_settings = sha256(jsonencode([var.use_local_block_volume, var.local_block_volume_size, var.local_block_volume_performance, var.local_block_volume_mount_point]))

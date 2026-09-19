@@ -26,9 +26,7 @@ resource "oci_core_cluster_network" "cluster_network" {
     size                      = var.node_count
     display_name              = local.cluster_name
   }
-  freeform_tags = {
-      "user" = var.tags
-  }
+  defined_tags = local.user_cost_tags
   placement_configuration {
     availability_domain = var.ad
     primary_subnet_id   = local.subnet_id

@@ -32,7 +32,7 @@ Terraform / Oracle Resource Manager スタックとして、コントローラ�
 ## IAM とポリシー
 
 スタックを実行するユーザーは、Administratorsグループに所属していることを想定しており、それによりデフォルトでオートスケーリングの利用に必要なポリシーと動的グループを自動で追加します。このオプションを有効にする場合は、テナンシのホームリージョンを参照し、IAM Policy / Dynamic Groupを作成するためのテナンシレベルの権限が必要です。
-Administratorグループの権限がない場合には【Autoscaling 用 IAM Policy / Dynamic Group を作成】のチェックを外し、テナント管理者にて以下のポリシーと動的グループを適切に設定をしてください。オプションを無効にすると、IAM Policy / Dynamic Groupだけでなく、その作成に必要なテナンシおよびホームリージョンの参照も実行しません。
+Administratorグループの権限がない場合には【Autoscaling 用 IAM Policy / Dynamic Group を作成】のチェックを外し、テナント管理者にて以下のポリシーと動的グループを適切に設定をしてください。オプションを無効にすると、Autoscaling用のIAM Policy / Dynamic Groupは作成しません。Definedタグ`hpc-cost.User`の定義は引き続き作成するため、スタック実行者にはテナンシとホームリージョンを参照する権限、およびデプロイ先コンパートメントの`tag-namespaces`を管理する権限が必要です。名前空間・キーの作成にはホームリージョンを使用します。
 
 ポリシー1:
 ```text
@@ -145,11 +145,13 @@ Slurm の状態を初期状態に戻したい場合は、次を実行します�
 
 ## ユーザー別のコストタグ
 
-`slurm_user_tags_enabled`（既定値 `true`）を有効にすると、SlurmのProlog／Epilogで計算ノードの利用者を記録し、コントローラーがOCIのfreeformタグ`user`へ反映します。作成時とアイドル時の値は`Management`、ジョブ実行中はSlurmのユーザー名です。ジョブIDをOCIタグへ追加することはありません。
+`slurm_user_tags_enabled`（既定値 `true`）を有効にすると、SlurmのProlog／Epilogで計算ノードの利用者を記録し、コントローラーがOCIのDefinedタグ`hpc-cost.User`へ反映します。作成時とアイドル時の値は`Management`、ジョブ実行中はSlurmのユーザー名です。ジョブIDをOCIタグへ追加することはありません。
 
-`queues.conf`の`tags`とスタックの`tags`変数の既定値も`Management`です。Cost Analysisでは`user`タグでユーザー別に集計します。対象は計算ノードのCompute費用で、ブートボリュームや共有ストレージの費用配賦は別途必要です。
+Terraformがデプロイ先コンパートメント（`targetCompartment`）に名前空間`hpc-cost`とキー`User`を作成します。キーの値型はStatic value（任意の文字列）です。初期ノードとAutoscalingで作成するノードの両方に同じDefinedタグを使用します。`slurm_user_tags_enabled=false`でも名前空間・キーとノード作成時のタグ付与は維持し、ジョブに応じた更新だけを停止します。
 
-タグはコントローラーで非同期に更新します。短いジョブはタグ反映前に終了することがあるため、ジョブの実行時間とOCIの費用が厳密に一致する仕組みではありません。設定、IAM、動作確認と制限は[ユーザー別コストタグの運用手順](docs/slurm-user-cost-tags.md)を参照してください。
+`queues.conf`の`tags`とスタックの`tags`変数の既定値も`Management`です。Cost Analysisでは名前空間`hpc-cost`、キー`User`を選んでユーザー別に集計します。対象は計算ノードのCompute費用で、ブートボリュームや共有ストレージの費用配賦は別途必要です。
+
+タグはコントローラーで非同期に更新します。短いジョブはタグ反映前に終了することがあるため、ジョブの実行時間とOCIの費用が厳密に一致する仕組みではありません。ワーカーは既存のfreeformタグを変更しません。既存環境の更新、同名の名前空間がある場合の取り込み、IAM、動作確認と制限は[ユーザー別コストタグの運用手順](docs/slurm-user-cost-tags.md)を参照してください。
 
 ## ジョブ投入
 
