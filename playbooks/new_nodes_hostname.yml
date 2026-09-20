@@ -1,0 +1,20 @@
+---
+# This preparation runs separately before OCI name synchronization during new
+# Autoscaling deployment.  Other callers import it as part of new_nodes.yml.
+- hosts: compute
+  become: true
+  vars:
+    destroy: false
+  gather_facts: true
+  roles:
+    - oci-hostname
+
+- hosts: compute
+  become: true
+  gather_facts: true
+  vars_files:
+    - "/opt/oci-hpc/conf/queues.conf"
+  tasks:
+    - include_role:
+        name: hostname
+      when: slurm | default(false) | bool

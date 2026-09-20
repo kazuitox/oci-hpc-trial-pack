@@ -1,6 +1,6 @@
 # OCI HPC Trial Pack
 
-[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/kazuitox/oci-hpc-trial-pack/archive/refs/tags/v1.3.1.zip)
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/kazuitox/oci-hpc-trial-pack/archive/refs/tags/v1.3.2.zip)
 
 本リポジトリは、Oracle Cloud Infrastructure (OCI) 上に HPC 環境を短時間で構築し、PoC や初期検証をすばやく開始することを目的としています。
 この目的に合わせて、現時点では Oracle Linux 8 を対象 OS として動作確認しています。その他の OS やバージョンについては未検証のため、利用する場合は個別に検証してください。
@@ -8,6 +8,17 @@
 Terraform / Oracle Resource Manager スタックとして、コントローラ、計算ノード、Slurm、LDAP、共有ストレージ、Autoscaling、監視、Open OnDemand などをまとめて構成します。
 
 `schema.yaml` は日本語 UI 向けに整備されており、`SIMPLE` モードでは最小限の入力、`ADVANCED` モードでは詳細な構成項目を表示します。
+
+## Resource Manager へ手動アップロードする場合
+
+Resource Manager 用のルート構成は Terraform **1.5.x** を対象にしています。`versions.tf` の `required_version = "~> 1.5.0, < 1.6"` は、1.5 系のパッチ版を許可し、1.6 以降を対象外にします。これは、Resource Manager がバージョン系列を判定できるよう `~> major.minor.0` で指定する [Oracle の Marketplace スタック・ガイドライン](https://docs.oracle.com/en-us/iaas/Content/Marketplace/app-publisher-guidelines-stacks.htm)に合わせた指定です。対応する実行版は [Resource Manager の対応表](https://docs.oracle.com/en-us/iaas/Content/ResourceManager/Reference/terraformversions.htm)で確認してください。
+
+- フォルダをアップロードするときは、`versions.tf`、`schema.yaml`、`variables.tf` が直下にあるリポジトリのルートを選択します。`autoscaling/tf_init/` はコントローラ上で実行する別構成なので選択しません。
+- アップロード後、スタック作成画面の Terraform バージョンが **1.5.x** になっていることを確認します。`Invalid Terraform version: .` が表示された場合は、修正済みの `versions.tf` を含むフォルダを再選択し、作業ディレクトリとバージョン欄を確認してください。画面側で値が空のままの場合は、選択状態・アップロード結果を別途確認する必要があります。
+- 手動 ZIP を使う場合も、同じファイルを ZIP のルート（または明示した作業ディレクトリ）に置きます。`.git`、`.terraform`、Terraform state、秘密鍵、実環境ログを含めないでください。未コミットの修正を試す場合、`git archive HEAD` では変更内容や新規ファイルが入りません。
+- 上のデプロイボタンは v1.3.2 を使います。未公開のローカル修正の試験には、更新後のフォルダまたは ZIP を使ってください。
+
+この上限制約はルート構成をローカル CLI で実行する場合にも適用されます。一方、Autoscaling 用の `autoscaling/tf_init/versions.tf` は Resource Manager でのバージョン選択には使わず、従来どおり Terraform **1.5.0 以上**を許可します。コントローラ側の Terraform を 1.5 系へ固定する変更ではありません。
 
 ## バージョニング
 
@@ -19,9 +30,13 @@ Terraform / Oracle Resource Manager スタックとして、コントローラ�
 
 変更履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
 
+## v1.3.2への更新
+
+v1.3.2は、新規Autoscalingノードの名前同期をSlurm起動前へ移し、OCI更新競合への限定的な再試行と構築途中からの再開を追加したパッチです。Resource ManagerのTerraformバージョン指定も修正しました。変更点と検証範囲は[リリースノート](docs/releases/v1.3.2.md)を参照してください。上のデプロイボタンはv1.3.2に固定しています。
+
 ## v1.3.1への更新
 
-v1.3.1はAutoscalingの自動削除前にジョブとノード状態を確認し、DRAIN後の再確認を追加したパッチです。削除受付が不明な場合はDRAINを維持します。既存コントローラーへの配布、必要なSlurm操作権限、ログ確認と復旧・切り戻しは[リリースノート](docs/releases/v1.3.1.md)を参照してください。上のデプロイボタンはv1.3.1に固定しています。
+v1.3.1はAutoscalingの自動削除前にジョブとノード状態を確認し、DRAIN後の再確認を追加したパッチです。削除受付が不明な場合はDRAINを維持します。既存コントローラーへの配布、必要なSlurm操作権限、ログ確認と復旧・切り戻しは[リリースノート](docs/releases/v1.3.1.md)を参照してください。
 
 ## v1.3.0への更新
 
@@ -250,18 +265,39 @@ Autoscaling と同じ仕組みを使って、クラスターを手動で作成�
 
 `instance_keyword` は `queues.conf` の値と一致させてください。
 
-Autoscaling の Instance Pool、Cluster Network、Compute Cluster では、Ansible の構成完了後に各ノードから
-実際の OS ホスト名を取得し、その値へ OCI インスタンス名と Primary VNIC の表示名を自動同期
-します。名前を事前計算するのではなく、Ansible 適用後のホスト名を正として扱います。VNIC の
+Autoscaling の Instance Pool、Cluster Network、Compute Cluster の新規作成では、最初に Ansible で
+OS ホスト名を設定し、各ノードから取得した実際のホスト名へ OCI インスタンス名と Primary VNIC の表示名を
+自動同期します。DNS・inventory の同期が成功してから、更新済み inventory を読み直して残りの構築と
+Slurm の設定・起動へ進みます。通常版・軽量版の両方で、ジョブ開始に伴うコストタグ更新より先に
+表示名更新を完了させる順序です。監視情報の整合は構築後に行います。VNIC の
 `hostname_label` は VCN 内部 DNS 用の別属性であり、変更しません。Secondary VNIC と
-VNIC attachment 固有の表示名も対象外です。既存クラスターを移行する場合は、次の再構成を
-一度実行してください。
+VNIC attachment 固有の表示名も対象外です。
 
 ここでいう VNIC 名は Networking サービス上の VNIC リソースの表示名です。VNIC attachment
 は公開 API に更新操作がないため、attachment 固有の表示名は同期対象に含みません。
 
 IAM Policy を手動管理している場合は、実行主体に Primary VNIC の更新権限
 （`VNIC_UPDATE`。通常は `use vnics`）も付与してください。
+
+新規作成の途中段階は、クラスターのディレクトリ内の `.initial-configure-stage` に記録します。
+ディレクトリと作成途中のリソースを保持して構築処理を再実行した場合、名前同期の失敗後は同期を再開してから
+残りの構築へ進み、後半の構築失敗後はホスト名設定・名前同期へ戻らず後半を再開します。監視更新だけの失敗は
+監視更新のみを再試行します。再開記録はクラスター名・インスタンス OCID・IP と照合し、別 AD での作り直しなどで
+対象が変わっていれば処理を停止します。記録を手動削除せず、対象リソースと作成ログを確認してください。
+従来版の名前同期ジャーナルだけが残っている場合は、従来どおり名前同期・監視更新のみで復旧します。
+通常の `create_cluster.sh` が作成失敗時に行う後始末は変更していません。
+
+OCI インスタンスの表示名更新で `409 Conflict` と「instance ... is currently being modified, try again later」が
+返された場合に限り、初回を含め最大 8 回、追加試行の開始期限を 60 秒として再試行します。
+実行中の SDK 呼び出しを 60 秒で強制中断するものではありません。他のエラーは通常どおり失敗として扱い、
+未完了の名前同期記録を保持します。カスタムイメージ内で `slurmd` が起動時から有効な場合は、
+構築前にジョブを受け付けないイメージ設定であることを実環境で確認してください。
+
+この変更を controller へ適用する際は、`bin/configure_as.sh`、`bin/resize.py`、
+`bin/initial_configure_state.py` と `playbooks/new_nodes_hostname.yml`・`new_nodes.yml`・`lite_new_nodes.yml` を
+同じリビジョンで揃えてください。コードの更新だけで作成済みノードを再構成する必要はありません。
+
+以下は既存の管理 CLI による移行手順です。新規作成時の同期前倒しのために実行する必要はありません。
 
 ```bash
 /opt/oci-hpc/bin/resize.sh --cluster_name <cluster_name> reconfigure

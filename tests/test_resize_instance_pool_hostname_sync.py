@@ -2956,23 +2956,25 @@ class InstancePoolNameWiringTests(unittest.TestCase):
         self.assertNotIn("desired_hostname=", combined)
         self.assertNotIn("instance_keyword=", self.inventory_template)
 
-    def test_initial_sync_runs_only_after_successful_ansible_configuration(self):
+    def test_initial_sync_runs_between_hostname_preparation_and_configuration(self):
         prepare = self.configure_autoscaling.index("prepare_local_block_volume")
-        playbook = self.configure_autoscaling.index(
-            "ansible-playbook $playbooks_path/new_nodes.yml"
+        hostname_playbook = self.configure_autoscaling.index(
+            'ansible-playbook "$playbooks_path/new_nodes_hostname.yml"'
         )
         sync = self.configure_autoscaling.index(
-            "synchronize_compute_names_and_monitoring", playbook
+            'synchronize_compute_names "$1"', hostname_playbook
         )
-        sync_helper = self.configure_autoscaling.split(
-            "synchronize_compute_names_and_monitoring()", 1
-        )[1].split("\n}\n", 1)[0]
-        self.assertLess(prepare, playbook)
-        self.assertLess(playbook, sync)
-        self.assertLess(
-            sync_helper.index("sync_instance_pool_names"),
-            sync_helper.index("--reconcile-monitoring"),
+        playbook = self.configure_autoscaling.index(
+            'ansible-playbook "$playbooks_path/new_nodes.yml"', sync
         )
+        monitoring = self.configure_autoscaling.index(
+            'reconcile_compute_monitoring "$1"', playbook
+        )
+        self.assertLess(prepare, hostname_playbook)
+        self.assertLess(hostname_playbook, sync)
+        self.assertLess(sync, playbook)
+        self.assertLess(playbook, monitoring)
+        self.assertIn('"autoscaling_names_prepared": true', self.configure_autoscaling)
 
     def test_initial_sync_is_gated_to_autoscaling_compute_before_oci_lookup(self):
         sync = self.configure_autoscaling.index("sync_instance_pool_names")
@@ -2982,20 +2984,22 @@ class InstancePoolNameWiringTests(unittest.TestCase):
         self.assertIn("is_autoscaling_compute_deployment", gating)
         self.assertNotIn("is_autoscaling_managed_pool_deployment", gating)
 
-    def test_initial_retry_resumes_pending_plan_before_ansible(self):
+    def test_legacy_initial_retry_resumes_pending_plan_before_ansible(self):
         pending = self.configure_autoscaling.index(
             ".instance-pool-hostname-sync.json"
         )
         resume = self.configure_autoscaling.index(
-            "synchronize_compute_names_and_monitoring", pending
+            'synchronize_compute_names "$1"', pending
         )
         prepare = self.configure_autoscaling.index("prepare_local_block_volume")
         playbook = self.configure_autoscaling.index(
-            "ansible-playbook $playbooks_path/new_nodes.yml"
+            'ansible-playbook "$playbooks_path/new_nodes.yml"'
         )
         self.assertLess(pending, resume)
         self.assertLess(resume, prepare)
         self.assertLess(resume, playbook)
+        legacy_gate = self.configure_autoscaling[:pending].rsplit("if ", 1)[1]
+        self.assertIn('[ -z "$configure_stage" ]', legacy_gate)
 
     def test_initial_sync_waits_for_terraform_dns_records(self):
         configure_resource = self.controller_update.split(

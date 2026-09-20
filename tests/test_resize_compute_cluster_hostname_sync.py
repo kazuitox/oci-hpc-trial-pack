@@ -2384,10 +2384,9 @@ class ComputeClusterWiringTests(unittest.TestCase):
         resize = self.read("bin", "resize.py")
 
         self.assertIn("sync_instance_pool_names", configure)
-        self.assertGreaterEqual(
-            configure.count("is_autoscaling_compute_deployment"),
-            3,
-        )
+        self.assertIn("if is_autoscaling_compute_deployment; then", configure)
+        self.assertIn("autoscaling_compute=true", configure)
+        self.assertIn('if [ "$autoscaling_compute" = true ]; then', configure)
         self.assertLess(
             configure.index(".instance-pool-hostname-sync.json"),
             configure.index("ansible-playbook"),

@@ -53,7 +53,8 @@ class SlurmNotificationDestroyCleanupTerraformTests(unittest.TestCase):
 
     def test_cleanup_anchor_requires_terraform_1_5(self):
         self.assertRegex(
-            self.versions, r'required_version\s*=\s*">= 1\.5(?:\.0)?"'
+            self.versions,
+            r'required_version\s*=\s*"~>\s*1\.5\.0(?:\s*,[^"\n]+)?"',
         )
 
     def test_cleanup_anchor_exists_when_notifications_are_enabled(self):
