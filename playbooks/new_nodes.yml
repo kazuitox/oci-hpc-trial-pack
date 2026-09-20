@@ -1,20 +1,5 @@
-- hosts: compute
-  become: true
-  vars:
-    destroy: false
-  gather_facts: true
-  roles:
-    - oci-hostname
-
-- hosts: compute
-  become: true
-  gather_facts: true
-  vars_files:
-    - "/opt/oci-hpc/conf/queues.conf"
-  tasks: 
-    - include_role:  
-        name: hostname
-      when: slurm | default(false) | bool
+- import_playbook: new_nodes_hostname.yml
+  when: not (autoscaling_names_prepared | default(false) | bool)
 
 # for ubuntu, on all compute nodes, run --fix-broken install
 - hosts: compute

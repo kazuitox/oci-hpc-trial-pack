@@ -3046,6 +3046,53 @@ def get_complete_compute_cluster_instances(
             )
         time.sleep(min(2, max(0, deadline-time.time())))
 
+def update_instance_display_name_with_conflict_retry(
+    instance_id,
+    desired_name,
+    max_wait_seconds=60,
+):
+    # The SDK default strategy handles its own retryable errors, but not the
+    # generic Conflict returned while another UpdateInstance is in progress.
+    # Reuse the same request and retry token for this additional, narrow retry.
+    details = oci.core.models.UpdateInstanceDetails(display_name=desired_name)
+    update_kwargs = {
+        "opc_retry_token": str(uuid.uuid4()),
+        **get_oci_retry_kwargs(),
+    }
+    deadline = time.monotonic()+max_wait_seconds
+    max_attempts = 8
+    for attempt in range(1, max_attempts+1):
+        try:
+            return computeClient.update_instance(
+                instance_id,
+                details,
+                **update_kwargs,
+            )
+        except oci.exceptions.ServiceError as error:
+            if not (
+                error.status == 409
+                and getattr(error, "code", None) == "Conflict"
+                and re.fullmatch(
+                    r"instance\b.*\bis currently being modified,\s*try again later\.?",
+                    str(getattr(error, "message", "")).strip(),
+                    re.IGNORECASE,
+                )
+            ):
+                raise
+            remaining = deadline-time.monotonic()
+            if attempt == max_attempts or remaining <= 0:
+                raise
+            delay = min(2**attempt, 10, remaining)
+            print(
+                "STDOUT: Instance display name update is temporarily busy for "+
+                instance_id+"; retrying in "+str(delay)+" seconds"
+            )
+            time.sleep(delay)
+            # This bounds additional attempts, including slow SDK calls and
+            # oversleep.  It does not interrupt an SDK call already in flight.
+            if time.monotonic() >= deadline:
+                raise
+
 def update_instance_pool_display_names(
     compartment_id,
     instance_pool_id,
@@ -3328,14 +3375,10 @@ def update_instance_pool_display_names(
                 time.sleep(2)
 
         if current_instances[instance_id].display_name != desired_name:
-            update_kwargs = {
-                "opc_retry_token": str(uuid.uuid4()),
-                **retry_kwargs,
-            }
-            computeClient.update_instance(
+            update_instance_display_name_with_conflict_retry(
                 instance_id,
-                oci.core.models.UpdateInstanceDetails(display_name=desired_name),
-                **update_kwargs,
+                desired_name,
+                max_wait_seconds=max_wait_seconds,
             )
             deadline = time.time()+max_wait_seconds
             while True:

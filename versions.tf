@@ -1,5 +1,7 @@
 terraform {
-  required_version = ">= 1.5.0"
+  # Resource Manager identifies the supported minor series from this constraint.
+  # The controller's standalone Autoscaling configuration has its own minimum.
+  required_version = "~> 1.5.0, < 1.6"
   required_providers {
     oci = {
       source  = "oracle/oci"
