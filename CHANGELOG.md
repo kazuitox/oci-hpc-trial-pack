@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Ubuntu の通常版 Autoscaling ノード作成時に `fix_ldap` が既存コントローラの SSSD を毎回再起動し、並行作成で systemd の起動回数制限に達する問題を修正しました。LDAP サービスの再起動対象を新規計算ノードに限定します。
+
 ## [v1.3.2] - 2026-09-20
 
 ### Fixed

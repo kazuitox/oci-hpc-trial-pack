@@ -31,7 +31,7 @@
 
 | ID | 守る振る舞い | 参照先・確認方法 |
 | --- | --- | --- |
-| REG-012 | Autoscaling はジョブに応じてクラスターを作成し、アイドル時に削除する。`permanent` とキューの上限を尊重し、通常の cron では途中リサイズを有効化しない。 | [README](../README.md)、[cron 設定](../playbooks/roles/cron/tasks/el.yml)、[Autoscaling スクリプト](../autoscaling/crontab/autoscale_slurm_disable-resize.sh)。設定検査と、pending ジョブからの作成・実行・アイドル削除を確認する。 |
+| REG-012 | Autoscaling はジョブに応じてクラスターを作成し、アイドル時に削除する。`permanent` とキューの上限を尊重し、通常の cron では途中リサイズを有効化しない。Ubuntu の通常版の動的ノード作成では、`fix_ldap` による既存コントローラの SSSD 再起動を行わず、新規計算ノードへの処理を維持する。 | [README](../README.md)、[cron 設定](../playbooks/roles/cron/tasks/el.yml)、[Autoscaling スクリプト](../autoscaling/crontab/autoscale_slurm_disable-resize.sh)、[新規ノード playbook](../playbooks/new_nodes.yml)。設定検査と、pending ジョブからの作成・実行・アイドル削除を確認する。通常版の Ubuntu では複数ノードの並行作成中にコントローラの SSSD 再起動が発生せず、計算ノードで LDAP ユーザーを参照できることも確認する。 |
 | REG-013 | 初期ノードと動的作成ノードへ必要な設定が渡る。SIMPLE / ADVANCED の表示を変えても必要な入力や既定値を失わない。 | [schema.yaml](../schema.yaml)、[inventory.tpl](../inventory.tpl)、[変数生成テンプレート](../conf/variables.tpl)、[動的ノード inventory](../autoscaling/tf_init/inventory.tpl)。REG-001 / REG-006 / REG-016 で確認する一部以外は、生成結果と構築結果を確認する。 |
 | REG-014 | VNC / DCV と GPU の設定を区別し、旧 `ood_vnc_use_gpu=true` の互換動作を維持する。各ジョブを適切なパーティションへ投入する。 | [README](../README.md)、[locals.tf](../locals.tf)、[Open OnDemand role](../playbooks/roles/openondemand)。旧設定と新設定の CPU / GPU・DCV 有効 / 無効の組合せを確認する。 |
 | REG-015 | Definedタグ`hpc-cost.User`はホームリージョンでデプロイ先コンパートメントへ作成する。IAM 自動作成・Slurm 通知・ユーザータグ更新の有効状態にかかわらず、そのための tenancy / home region 参照を行う。IAM 自動作成と通知が無効の場合、それらのポリシーや動的グループは作成しない。 | [data.tf](../data.tf)、[locals.tf](../locals.tf)、[iam.tf](../iam.tf)、[cost-tags.tf](../cost-tags.tf)。旧来の参照省略条件は、常時行う初期タグ付与をDefinedタグへ移したことにより変更した。各フラグの組合せで参照と生成されるリソースを確認する。 |
