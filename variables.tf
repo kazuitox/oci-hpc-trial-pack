@@ -189,6 +189,23 @@ variable "slurm_job_notifications_enabled" {
   type    = bool
   default = false
 }
+variable "autoscaling_failure_notifications_enabled" {
+  type    = bool
+  default = false
+}
+variable "autoscaling_failure_admin_email" {
+  type      = string
+  default   = ""
+  sensitive = true
+
+  validation {
+    condition = (
+      trimspace(var.autoscaling_failure_admin_email) == "" ||
+      can(regex("^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,63}$", trimspace(var.autoscaling_failure_admin_email)))
+    )
+    error_message = "autoscaling_failure_admin_email must be empty or a valid email address."
+  }
+}
 variable "slurm_notification_admin_email" {
   type      = string
   default   = ""

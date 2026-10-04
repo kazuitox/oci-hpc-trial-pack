@@ -125,6 +125,8 @@ HPC_OL8
 | `login_node` | ユーザー用の追加 Login Node を作成します。 |
 | `slurm_ha` | バックアップ Slurm Controller を作成します。 |
 | `slurm_job_notifications_enabled` | OCI Notifications を使った Slurm ジョブメール通知を有効化します。デフォルトは `false`。 |
+| `autoscaling_failure_notifications_enabled` | Autoscaling の計算ノード作成失敗を管理者へメール通知します。デフォルトは `false`。 |
+| `autoscaling_failure_admin_email` | 作成失敗通知専用の EMAIL Subscription の宛先です。Slurm ジョブ通知とは別の Topic / Subscription を使用します。 |
 | `slurm_notification_admin_email` | ローカル Controller ユーザー（通常は `opc`）のジョブ通知先メールアドレス。 |
 | `use_ood` | Open OnDemand と OpenComposer をインストールします。 |
 | `ood_dcv_enabled` | 検証用のAmazon DCVデスクトップと専用の`dcv`パーティションを有効化します。 |
@@ -138,6 +140,14 @@ HPC_OL8
 旧バージョンで`ood_vnc_use_gpu=true`だった既存スタックは、Amazon DCV連携とA10 GPUデスクトップの両方を有効にした状態を維持します。個別設定に移行するには、UIに表示される旧設定をOffにしてください。
 
 ## Autoscaling
+
+### 作成失敗の管理者通知
+
+スタックの「計算ノードの作成失敗を管理者へ通知」を有効にし、管理者メールアドレスを入力すると、専用の OCI Notifications Topic / EMAIL Subscription と Controller 用の Dynamic Group / publish 権限を作成します。Slurm ジョブ通知の設定とは独立しており、管理者は OCI Notifications から届く Subscription 確認メールを承認する必要があります。IAM の自動作成を使わない環境でも、この通知用リソースをスタックに作成するため、スタック実行者にはホームリージョンでの Dynamic Group / Policy 作成と対象 Compartment での Topic / Subscription 作成権限が必要です。Controller から OCI API へ HTTPS で到達できることも確認してください。
+
+作成が失敗すると、後始末の前に Controller が Terraform / Ansible ログと、該当リソースを特定できた場合の失敗 Work Request の error / log を収集します。メールにはクラスター、キュー、起点 Job ID、失敗箇所、作成ログのパスを記載します。Work Request を特定・取得できない場合は、その旨と Terraform / Ansible のエラーを記載します。`-DEBUG` で後始末を抑止した作成失敗も通知対象です。送信に失敗した通知は `/opt/oci-hpc/logs/autoscaling-failure-notifications/` に保持し、Controller の cron で毎分再試行します。送信失敗はクラスターの後始末を止めません。メール配信が成功したことは、作成失敗の繰り返しが止まったことを意味しません。
+
+既存スタックで有効化する場合、Resource Manager の Plan で専用 IAM / Notifications リソースと Controller への通知プログラム配布を確認してから Apply します。この設定変更は既存計算ノードの再構成を要求しません。Controller 上の旧版スクリプトだけを個別に更新しても、Topic / 権限 / 設定ファイルは作成されません。通知を無効にすると Topic / Subscription と通知用 Policy / Dynamic Group を Terraform が削除し、Controller の再送 cron を停止します。未送信ファイルがある場合は無効化前に確認してください。
 
 Autoscaling は「ジョブごとにクラスターを作成する」方式です。Slurm の pending ジョブを cron で確認し、ジョブのノード数、キュー、インスタンスタイプに合わせて新しいクラスターを作成します。アイドル状態のクラスターは、デフォルトで 600 秒経過後に削除対象になります。
 

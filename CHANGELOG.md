@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Autoscaling の計算ノード作成失敗を、Slurm ジョブ通知から独立した OCI Notifications Topic / EMAIL Subscription で管理者へ通知できるようにしました。Terraform / Ansible と OCI Work Request の診断を後始末前に保存し、送信失敗時は Controller 上で再試行します。初期設定は無効です。
+
 ## [v1.4.1] - 2026-10-11
 
 ### Fixed
