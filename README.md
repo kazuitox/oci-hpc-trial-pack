@@ -30,6 +30,12 @@ Resource Manager 用のルート構成は Terraform **1.5.x** を対象にして
 
 変更履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
 
+## Autoscaling の識別子と topology 更新
+
+`queues.conf` の `instance_keyword` は、`e5` と `e5-lite` のように一方が他方の先頭部分になる値も使えます。修正版は Switch 名を完全一致で照合し、必要な一覧の取得・展開に失敗した場合は `topology.conf` を更新しません。既存のキーワード・ノード名・クラスター名を維持します。
+
+既存コントローラーへの更新では、変更した Ansible タスクと `playbooks/library/slurm_topology.py` を一緒に配布してください。修正箇所、失敗時の動作、配布・切り戻し、フォーク元との違いは[調査・更新手順](docs/autoscaling-topology-identity.md)にまとめています。実 OCI / Slurm での確認は別途必要です。
+
 ## v1.3.2への更新
 
 v1.3.2は、新規Autoscalingノードの名前同期をSlurm起動前へ移し、OCI更新競合への限定的な再試行と構築途中からの再開を追加したパッチです。Resource ManagerのTerraformバージョン指定も修正しました。変更点と検証範囲は[リリースノート](docs/releases/v1.3.2.md)を参照してください。上のデプロイボタンはv1.3.2に固定しています。
