@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- Autoscaling の topology 更新で `SLURM_CLUSTERS` に空文字を設定していた不具合を修正しました。Slurm が空のクラスター名を検索して作成・削除に失敗するため、子プロセスの環境からこの変数を除外します。`SLURM_CONF` などの設定は保持し、空値・別クラスター名の継承を検出する回帰テストを追加しました。
 - Autoscaling の標準版・軽量版・ラック対応版の作成／削除と到達不能ノード回収で、Switch 名を完全一致で扱います。`e5` と `e5-lite` の混同を防ぎ、必要な Switch の欠落・重複・Slurm コマンド失敗時に空一覧で topology を上書きしないようにしました。
 - topology 更新を共通の Ansible モジュールにまとめ、展開・圧縮を検証後、ロックを保持して原子的に置き換えます。既存のキーワード・名前・設定形式を維持します。既存環境では変更タスクと `playbooks/library/slurm_topology.py` を同時に配布してください。[調査・更新手順](docs/autoscaling-topology-identity.md)と共存・失敗時の回帰テストを追加しました。
 

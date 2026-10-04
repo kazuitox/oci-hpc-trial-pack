@@ -3,6 +3,7 @@
 import fcntl
 import os
 import re
+import subprocess
 import tempfile
 
 DOCUMENTATION = r'''
@@ -182,6 +183,22 @@ def plan_update(source, nodes, action, cluster, inactive, racks, expand, condens
     return output + ''.join(additions)
 
 
+def scontrol_hostlist(subcommand, value):
+    # Unset the inherited cluster selector. An empty value is still a selector
+    # and makes real Slurm look up a cluster named ''. Keep SLURM_CONF intact.
+    environment = dict(os.environ)
+    environment.pop('SLURM_CLUSTERS', None)
+    result = subprocess.run(
+        ['scontrol', 'show', subcommand, value],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        universal_newlines=True, env=environment,
+    )
+    if result.returncode != 0:
+        raise ValueError('scontrol {} failed: {}'.format(
+            subcommand, result.stderr or result.stdout))
+    return result.stdout.strip()
+
+
 def main():
     from ansible.module_utils.basic import AnsibleModule
     module = AnsibleModule(argument_spec=dict(
@@ -201,17 +218,10 @@ def main():
             with open(path, encoding='utf-8') as stream:
                 source = stream.read()
 
-            def command(subcommand, value):
-                rc, stdout, stderr = module.run_command(
-                    ['scontrol', 'show', subcommand, value], environ_update={'SLURM_CLUSTERS': ''})
-                if rc != 0:
-                    raise ValueError('scontrol {} failed: {}'.format(subcommand, stderr or stdout))
-                return stdout.strip()
-
             result = plan_update(source, params['nodes'], params['action'],
                                  params['cluster'], params['inactive'], params['racks'],
-                                 lambda value: command('hostname', value).splitlines(),
-                                 lambda values: command('hostlistsorted', ','.join(values)))
+                                 lambda value: scontrol_hostlist('hostname', value).splitlines(),
+                                 lambda values: scontrol_hostlist('hostlistsorted', ','.join(values)))
             changed = result != source
             if changed and not module.check_mode:
                 fd, temporary = tempfile.mkstemp(prefix='.topology-', dir=os.path.dirname(path))

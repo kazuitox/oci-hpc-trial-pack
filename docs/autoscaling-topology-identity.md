@@ -29,6 +29,14 @@
 
 このロックは、修正前のスクリプトや手動編集、server のキュー追加処理を直列化するものではありません。新旧の処理を並行実行せず、配布やキュー再生成は Autoscaling の作成・削除が動いていない時間に行ってください。
 
+## 空の SLURM_CLUSTERS による失敗を修正する
+
+初版の共通モジュールには、`SLURM_CLUSTERS` を空文字に設定する不具合がありました。Ubuntu の検証環境では `scontrol hostname failed: No cluster '' known by database` となり、topology 更新前にノード構成が失敗しました。修正版は子プロセスの環境からこの変数を除外します。`SLURM_CONF` やその他の環境変数と、親プロセスの環境は保持します。`SLURM_CLUSTERS` が `--clusters` に相当することは [scontrol の公式説明](https://slurm.schedmd.com/scontrol.html#SECTION_ENVIRONMENT-VARIABLES)で確認できます。
+
+この不具合の対処は `playbooks/library/slurm_topology.py` の更新で足ります。モジュールが毎回空文字を設定していたため、ログインシェルで `unset SLURM_CLUSTERS` を実行するだけでは直りません。修正版を配布後、`env -u SLURM_CLUSTERS scontrol show hostname 'test-node-[1-2]'` で hostlist 展開ができることを確認し、通常の作成試験を再実施します。残存クラスターの後始末・再開は、その時点の Terraform・inventory・構築段階記録を確認して判断します。
+
+回帰テストの Slurm スタブは、この変数が存在する場合にエラーを返します。未設定・空文字・別クラスター名の各ケースで、実タスクからの作成が成功すること、既存の `e5-lite` の一覧を保持することを確認します。スタブ試験の成功は、実 Slurm 上の再試験済みを意味しません。
+
 ## 既存環境ではタスクとモジュールを一緒に配布する
 
 `instance_keyword`、`queues.conf`、クラスターのディレクトリ名、Switch 名、ノード名は維持します。Terraform・IAM の変更やノードの再作成は、この修正の適用要件ではありません。

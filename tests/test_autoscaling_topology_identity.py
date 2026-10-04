@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+from unittest.mock import patch
 import re
 import shutil
 import subprocess
@@ -129,9 +130,35 @@ class TopologyIdentityTests(unittest.TestCase):
                 update(racks=racks)
 
 
+class ScontrolEnvironmentTests(unittest.TestCase):
+    def test_cluster_selector_is_absent_in_child_and_parent_is_unchanged(self):
+        for selector in [None, '', 'other-cluster']:
+            environment = {'SLURM_CONF': '/fixture/slurm.conf', 'PATH': '/fixture/bin'}
+            if selector is not None:
+                environment['SLURM_CLUSTERS'] = selector
+            for subcommand, value in [('hostname', 'n[1-2]'), ('hostlistsorted', 'n1,n2')]:
+                with self.subTest(selector=selector, subcommand=subcommand):
+                    completed = subprocess.CompletedProcess([], 0, 'expected\n', '')
+                    with patch.dict(os.environ, environment, clear=True), patch.object(
+                            topology.subprocess, 'run', return_value=completed) as command:
+                        self.assertEqual(topology.scontrol_hostlist(subcommand, value), 'expected')
+                        self.assertEqual(command.call_args.args[0], ['scontrol', 'show', subcommand, value])
+                        child = command.call_args.kwargs['env']
+                        self.assertNotIn('SLURM_CLUSTERS', child)
+                        self.assertEqual(child['SLURM_CONF'], environment['SLURM_CONF'])
+                        self.assertEqual(child['PATH'], environment['PATH'])
+                        self.assertEqual(dict(os.environ), environment)
+
+    def test_scontrol_failure_is_not_accepted(self):
+        completed = subprocess.CompletedProcess([], 1, '', 'invalid cluster')
+        with patch.object(topology.subprocess, 'run', return_value=completed):
+            with self.assertRaisesRegex(ValueError, 'scontrol hostname failed: invalid cluster'):
+                topology.scontrol_hostlist('hostname', 'n[1-2]')
+
+
 @unittest.skipUnless(shutil.which('ansible-playbook'), 'ansible-playbook is required for integration tests')
 class AnsibleTopologyTests(unittest.TestCase):
-    def run_play(self, task_file, source=SOURCE, *, failure='', missing_type=False, check=False):
+    def run_play(self, task_file, source=SOURCE, *, failure='', missing_type=False, check=False, cluster_environment=None):
         with tempfile.TemporaryDirectory(prefix='topology-identity-') as directory:
             root = Path(directory)
             path = root / 'topology.conf'
@@ -139,6 +166,9 @@ class AnsibleTopologyTests(unittest.TestCase):
             path.chmod(0o640)
             command = root / 'scontrol'
             command.write_text('#!' + sys.executable + '\n' + '''import os,re,sys
+if 'SLURM_CLUSTERS' in os.environ:
+    print("scontrol: error: invalid SLURM_CLUSTERS entry", file=sys.stderr)
+    sys.exit(1)
 if os.environ.get('TOPOLOGY_FAIL') == sys.argv[2]:
     sys.exit(1)
 value=sys.argv[3]
@@ -180,6 +210,9 @@ else:
             env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
                        ANSIBLE_LIBRARY=str(MODULE.parent), ANSIBLE_LOCAL_TEMP=str(root / 'local'),
                        ANSIBLE_REMOTE_TEMP=str(root / 'remote'), TOPOLOGY_FAIL=failure)
+            env.pop('SLURM_CLUSTERS', None)
+            if cluster_environment is not None:
+                env['SLURM_CLUSTERS'] = cluster_environment
             result = subprocess.run(['ansible-playbook', '-i', 'localhost,', '-c', 'local', str(play_path)] +
                                     (['--check'] if check else []), env=env, capture_output=True, text=True, timeout=45)
             return result, path.read_text(), path.stat().st_mode & 0o777
@@ -255,6 +288,18 @@ else:
                               keyword + '-node-1,compute-' + keyword + '-node-4', output)
                 self.assertIn('SwitchName=inactive-compute-' + keyword + ' Nodes=compute-' +
                               keyword + '-node-2,compute-' + keyword + '-node-3', output)
+
+    def test_standard_and_lite_ignore_empty_and_foreign_cluster_selectors(self):
+        for name in ['compute.yml', 'lite_compute.yml']:
+            for selector in ['', 'other-cluster']:
+                with self.subTest(name=name, selector=selector):
+                    result, output, mode = self.run_play(
+                        'playbooks/roles/slurm/tasks/' + name,
+                        cluster_environment=selector)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn('SwitchName=compute-1-e5 Nodes=compute-e5-node-1,compute-e5-node-4', output)
+                    self.assertIn('SwitchName=inactive-compute-e5-lite Nodes=compute-e5-lite-node-[1-3]\n', output)
+                    self.assertEqual(mode, 0o640)
 
     def test_check_mode_never_writes(self):
         result, output, _ = self.run_play('playbooks/roles/slurm/tasks/compute.yml', check=True)
