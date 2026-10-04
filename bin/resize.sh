@@ -204,16 +204,28 @@ reconcile_compute_monitoring()
   fi
 }
 
-if [ $EUID -eq 0 ]
+if ! effective_uid=$(/usr/bin/id -u) || ! [[ "$effective_uid" =~ ^[0-9]+$ ]]
 then
-  echo "Run this script as opc or ubuntu and not as root"
-  exit
+  echo "Cannot determine the effective user ID" >&2
+  exit 1
 fi
 
-if [ $USER != "ubuntu" ] && [ $USER != "opc" ]
+if [ "$effective_uid" -eq 0 ]
 then
-  echo "Run this script as opc or ubuntu"
-  exit
+  echo "Run this script as opc or ubuntu and not as root" >&2
+  exit 1
+fi
+
+if ! effective_user=$(/usr/bin/id -un) || [ -z "$effective_user" ]
+then
+  echo "Cannot determine the effective user name" >&2
+  exit 1
+fi
+
+if [ "$effective_user" != "ubuntu" ] && [ "$effective_user" != "opc" ]
+then
+  echo "Run this script as opc or ubuntu (current user: $effective_user)" >&2
+  exit 1
 fi
 
 if [ $# -eq 0 ]

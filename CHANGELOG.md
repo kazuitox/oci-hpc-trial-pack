@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Autoscaling の監視再同期などで使う `resize.sh` の実行ユーザー判定を実効 UID とユーザー名に基づく判定へ変更しました。`USER` が未設定・空・不一致・空白入りでも許可された `ubuntu` / `opc` は実行でき、root・許可外・ユーザー特定失敗時は非ゼロで停止します。`create_cluster.sh` の root 拒否も非ゼロ終了に修正しました。
+
 ## [v1.3.2] - 2026-09-20
 
 ### Fixed
