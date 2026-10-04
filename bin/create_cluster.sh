@@ -17,7 +17,7 @@ fi
 if [ $EUID -eq 0 ]
 then
   echo "Run this script as opc or ubuntu and not as root"
-  exit
+  exit 1
 fi
 
 date=`date '+%Y%m%d%H%M'`

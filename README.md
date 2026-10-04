@@ -244,6 +244,9 @@ Autoscaling で作成されたクラスターごとの Terraform 作業ディレ
 ## 手動クラスター操作
 
 Autoscaling と同じ仕組みを使って、クラスターを手動で作成・削除できます。
+コントローラ上の `create_cluster.sh` と `resize.sh` は `ubuntu` または `opc` の実行ユーザーで起動してください。
+`resize.sh` は実際の実行ユーザーを確認します。`USER` 環境変数の設定は不要で、root や許可外ユーザーの場合はエラーで終了します。
+監視情報の再同期だけを再試行する場合も、同じユーザーで `resize.sh --cluster_name <cluster_name> --reconcile-monitoring` を実行します。
 
 作成:
 
