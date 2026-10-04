@@ -1,0 +1,13 @@
+---
+- name: Wait for SlurmDBD to return cpu and mem TRES
+  become: true
+  script: >-
+    slurm_readiness.py dbd --bin-dir {{ (slurm_exec ~ '/bin') | quote }}
+    --total-timeout {{ slurm_readiness_timeout }}
+    --command-timeout {{ slurm_readiness_command_timeout }}
+    --interval {{ slurm_readiness_interval }}
+  args:
+    executable: /usr/bin/python3
+  environment:
+    SLURM_CONF: "{{ slurm_conf_path }}/slurm.conf"
+  changed_when: false

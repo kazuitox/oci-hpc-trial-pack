@@ -1,0 +1,14 @@
+---
+- name: Wait for primary response and reconfigure the local cluster
+  become: true
+  script: >-
+    slurm_readiness.py reconfigure --bin-dir {{ (('/usr/local' if hostvars[groups['controller'][0]]['ansible_distribution'] == 'Ubuntu' else '/usr') ~ '/bin') | quote }}
+    --total-timeout {{ slurm_readiness_timeout }}
+    --command-timeout {{ slurm_readiness_command_timeout }}
+    --interval {{ slurm_readiness_interval }}
+  args:
+    executable: /usr/bin/python3
+  environment:
+    SLURM_CONF: "{{ slurm_conf_path }}/slurm.conf"
+  delegate_to: 127.0.0.1
+  run_once: true

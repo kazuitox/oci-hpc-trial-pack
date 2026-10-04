@@ -118,9 +118,8 @@
   retries: 10
   delay: 5
 
-- name: start slurmctld
-  become: true
-  service:
-    name: slurmctld
-    state: restarted
-    enabled: true
+- name: Flush pending munge restart before controller checks
+  meta: flush_handlers
+
+- name: Start backup after primary accounting is ready
+  include_tasks: start-controller.yml

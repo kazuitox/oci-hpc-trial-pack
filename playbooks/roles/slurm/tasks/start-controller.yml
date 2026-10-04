@@ -1,0 +1,32 @@
+---
+- name: Start controller only after accounting is ready
+  any_errors_fatal: true
+  block:
+    - name: Check accounting before starting slurmctld
+      include_tasks: wait-dbd.yml
+
+    - name: Clear previous slurmctld start-limit failure
+      become: true
+      command: timeout --kill-after=2s 15s systemctl reset-failed slurmctld
+      changed_when: false
+
+    - name: Restart slurmctld
+      become: true
+      service:
+        name: slurmctld
+        state: "{{ slurm_controller_service_state | default('restarted') }}"
+        enabled: true
+
+    - name: Wait for this controller to answer ping
+      become: true
+      script: >-
+        slurm_readiness.py controller --bin-dir {{ (slurm_exec ~ '/bin') | quote }}
+        --controller {{ 'backup' if 'slurm_backup' in group_names else 'primary' }}
+        --total-timeout {{ slurm_readiness_timeout }}
+        --command-timeout {{ slurm_readiness_command_timeout }}
+        --interval {{ slurm_readiness_interval }}
+      args:
+        executable: /usr/bin/python3
+      environment:
+        SLURM_CONF: "{{ slurm_conf_path }}/slurm.conf"
+      changed_when: false

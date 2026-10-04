@@ -148,6 +148,9 @@
 - name: Configure OCI Notifications mail delivery
   ansible.builtin.include_tasks: notifications.yml
 
+- name: Flush munge handlers before scheduling Slurm startup
+  meta: flush_handlers
+
 - name: Generate slurm.conf
   become: true
   template: 
@@ -157,6 +160,7 @@
     backup: yes
     owner: slurm
     group: slurm
+  register: slurm_config
   notify: restart slurm server
   when: initial | bool
 
@@ -202,6 +206,15 @@
   run_once: true
   notify: reconfigure slurm
 
+
+# A previous failed deployment may already have identical slurm.conf. In that
+# case no restart notification fires, but failed/stopped services still need start.
+- name: Ensure unchanged configuration has ready Slurm services
+  include_tasks: restart-server.yml
+  vars:
+    slurm_accounting_service_state: started
+    slurm_controller_service_state: started
+  when: not slurm_config.changed
 
 - name: run handlers
   meta: flush_handlers

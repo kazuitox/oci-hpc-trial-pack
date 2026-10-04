@@ -384,6 +384,40 @@ cluster user delete <name>
 
 ユーザー専用 Topic の名前は `slurm-<cluster>-<user>-<12桁の識別子>` です。末尾の識別子はデプロイ固有の通知スコープとユーザー名から決定的に生成され、同名のクラスタやユーザーが別スタックに存在する場合、および名前の正規化・切り詰め後に同じ文字列になる場合の衝突を防ぎます。同じ通知スコープとユーザー名の組み合わせでは常に同じ値になります。
 
+## Slurm の初期起動と再構成の待機
+
+Slurm 23.02.5 では、SlurmDBD のサービスが起動していても、DB の初期化が完了する前に slurmctld を起動すると、TRES を取得できず停止する場合があります。SlurmDBD の `active` 状態や 6819 番ポートだけでは準備完了を判定しません。
+
+初回構成で slurm.conf を生成・変更した場合は、Munge の鍵を反映してから、次の順に処理します。
+
+1. slurmctld を停止し、SlurmDBD を再起動する。
+2. root 権限で `sacctmgr -nP show tres format=Type,Name,ID` を実行し、終了コード 0、3 列の応答、有効な正整数 ID、名前が空の `cpu`・`mem` TRES を確認する。
+3. `systemctl reset-failed slurmctld` で前回の起動回数制限を解除し、slurmctld を再起動する。
+4. `scontrol ping` の終了コード 0 と `Slurmctld(primary) ... is UP` を確認する。
+5. reconfigure ハンドラでも primary の応答を確認してから、`scontrol reconfigure` を実行する。
+
+前回の構成が失敗し、同じ slurm.conf が残っている場合も、SlurmDBD の起動・TRES 確認・slurmctld の起動・ping 確認を行います。この経路のサービス操作は `started` で、稼働中のサービスを再起動しません。HA のバックアップは、primary の SlurmDBD から TRES を取得してから起動し、`Slurmctld(backup) ... is UP` を確認します。バックアップの primary への昇格は要求しません。
+
+確認コマンドは 1 回最大 15 秒、TRES と ping の各待機は最大 180 秒です。失敗した試行の後に最大 5 秒待って再確認し、最後の試行は残り時間で打ち切ります。reconfigure 自体の再試行は最大 45 秒です。通常の初回構成では、起動時の TRES・ping と reconfigure 前の ping を合わせ、準備確認は最大 540 秒、reconfigure の試行を含めて最大 585 秒です。これはサービス操作、SSH、他の構成タスクの時間を含みません。reset-failed は 15 秒でタイムアウトし、終了しなければさらに 2 秒後に強制終了します。
+
+待機は role の `slurm_readiness_timeout`（180）、`slurm_readiness_command_timeout`（15）、`slurm_readiness_interval`（5）で指定します。各値の単位は秒です。固定 sleep のみの待機や、失敗を無視した続行は行いません。期限切れでは対象コマンド、試行回数、最後の終了コード・標準出力・標準エラーを Ansible に返し、後続処理を停止します。
+
+確認と reconfigure の子プロセスでは `SLURM_CLUSTERS` を除外します。未設定・空文字・別クラスター名のいずれでもローカル設定を参照し、親環境は変更しません。role が指定する `SLURM_CONF` とその他の環境変数を保持します。Ubuntu は `/usr/local/bin`、Oracle Linux 8 は `/usr/bin` の Slurm コマンドを使います。動的ノードからの reconfigure は、委譲先コントローラの OS を基準に選択します。通常版・軽量版はこのハンドラを共有し、軽量版の計算ノードでは DBD や controller の再起動を追加しません。Slurm 無効時は role が呼び出されず、待機も実行しません。
+
+既存環境へ適用する場合は、保守時間を確保し、この変更を含む `playbooks/roles/slurm/` 全体をコントローラの `/opt/oci-hpc/playbooks/roles/slurm/` に配布してから、通常の `/opt/oci-hpc/bin/configure.sh` を再実行します。新しい `files/slurm_readiness.py` と `tasks/` のファイルも必要です。Ansible が確認スクリプトを対象ホストへ一時転送するため、バックアップへ手動インストールする必要はありません。Resource Manager の構成ファイルを置き換えただけで、既存コントローラへの配布・再構成が実行されたと判断しないでください。DB 接続先、実行時の設定パス、キュー、topology.conf、Slurm の状態ファイルは変更・削除・初期化しません。復旧に `cluster configure --initial` を使う必要はありません。
+
+実機確認は、Ubuntu 24.04 と Oracle Linux 8 のそれぞれで、新規 Resource Manager デプロイと既存環境の再構成を実施します。Slurm 有効の単一コントローラと HA、Slurm 無効の構成を対象に、次を確認してください。これらは利用者が検証環境で行う手順であり、ローカルテストの成功を実機検証済みの根拠にはしません。
+
+- 新規デプロイ：初期構成ログで TRES 確認 → slurmctld 起動 → ping 成功 → reconfigure の順を確認する。Resource Manager の remote-exec が成功し、Ansible の `failed=0`・`unreachable=0`、configure の終了コード 0 を期待する。
+- 再構成：role を配布し、通常の configure.sh を実行する。設定が変わった経路と、同じ設定で再実行した経路の双方で成功することを確認する。topology.conf と状態ファイルが残り、既存キューが維持されることも確認する。
+- 応答と継続稼働：`sudo env -u SLURM_CLUSTERS timeout 15s sacctmgr -nP show tres format=Type,Name,ID` と `sudo env -u SLURM_CLUSTERS timeout 15s scontrol ping` を実行し、cpu・mem、primary の UP、6817 番ポートの待ち受け、数分間の継続稼働を確認する。Ubuntu で PATH に Slurm がない場合は `/usr/local/bin/`、Oracle Linux 8 では `/usr/bin/` をコマンド名に付ける。
+- HA：バックアップで primary の DBD への TRES 問い合わせと backup の UP を確認する。バックアップが待機状態のまま構成に成功することを期待する。
+- 環境変数：configure を実行する親環境の `SLURM_CLUSTERS` が未設定・空文字・別クラスター名の各ケースでも、確認対象がローカルクラスターであることを確認する。親の変数値が保持されることも確認する。
+- 障害時：隔離した検証環境で DBD の準備遅延・接続失敗、controller の応答遅延・応答不能を再現する。遅延後の成功では再試行し、失敗が続く場合は期限内に構成が失敗することを期待する。DBD の失敗時は slurmctld の起動に、ping の失敗時は reconfigure に進まないことをログで確認する。
+- 通常版・軽量版：新規構成成功後、各方式で動的ノードを構成し、共有ハンドラで ping → reconfigure が成功することを確認する。Slurm 無効時には確認コマンドもサービス操作も発生しないことを確認する。
+
+この修正のローカル回帰テストは [test_slurm_startup_readiness.py](tests/test_slurm_startup_readiness.py)、保護する振る舞いと実機確認範囲は [回帰確認台帳の REG-021](docs/REGRESSION_LEDGER.md) を参照してください。
+
 ## Slurm ジョブメール通知
 
 スタック作成時に「Slurm ジョブメール通知を有効化」を選び、管理者メールアドレスを入力すると、次のリソースと設定を自動構成します。

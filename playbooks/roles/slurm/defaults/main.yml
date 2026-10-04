@@ -20,3 +20,8 @@ slurm_notification_spool_path: /var/spool/slurm-oci-notify
 slurm_user_tags_enabled: true
 slurm_user_tags_state_dir: "{{ slurm_nfs_path }}/oci-user-tags"
 slurm_user_tags_local_cache_dir: /var/lib/slurm-oci-user-tags
+
+# Each readiness phase has its own monotonic deadline; commands share it.
+slurm_readiness_timeout: 180
+slurm_readiness_command_timeout: 15
+slurm_readiness_interval: 5
