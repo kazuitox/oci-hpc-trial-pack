@@ -24,6 +24,7 @@
 | REG-018 | AMD VMの対応するHT設定を初期・動的ノードへ渡す。非対応キュー設定を反映前に拒否し、VMではOS側のCPUオフライン化をしない。BMのCPU範囲表記と失敗検出を維持する。 | [Terraform設定](../tests/test_instance_pool_hyperthreading_terraform.py)、[HT role](../tests/test_hyperthreading_role.py)、[OS側制御](../tests/test_hyperthreading_guest.py)、[キュー検証](../tests/test_slurm_config_validation.py)。Terraform mock planは1.7以上が必要。実機のShape対応情報は別途確認する。 |
 | REG-019 | 通常のAutoscalingの削除前にノード全体と未終了ジョブを確認し、DRAIN後に再確認する。時刻不明を架空のアイドル時間へ変換しない。削除起動前の失敗・受付前終了時は自分のDRAINだけを解除するよう試み、受付不明時は保持する。 | [test_autoscale_safe_delete.py](../tests/test_autoscale_safe_delete.py)：アイドル時刻、RUNNING / SUSPENDED / COMPLETING、障害状態、DRAIN中のジョブ変化、部分失敗、起動失敗・受付前終了・受付不明のモックテスト。実機のSlurm権限と削除受付のタイミングは別途確認。 |
 | REG-020 | Resource Manager 用のルート構成は `~> major.minor.0` 形式で Terraform 1.5.x を明示し、1.5 より前・1.6 以降を許可しない。コントローラで実行する Autoscaling 用構成は 1.5.0 以上を許可し続ける。provider の固定バージョンを維持する。 | [test_resource_manager_terraform_version.py](../tests/test_resource_manager_terraform_version.py)：ルート・動的構成のバージョン宣言の静的検査と、利用可能な Terraform CLI による provider 不要の最小構成の制約確認。[通知の後始末](../tests/test_slurm_notification_destroy_cleanup_terraform.py)：Terraform 1.5 系の最低要件。Resource Manager の画面側の自動判定は別途確認。 |
+| REG-021 | Autoscaling の作成失敗時、削除前に原因を保存して専用 Topic から管理者へ通知する。Ansible の失敗 task / host と、特定できた失敗 Work Request の error / log を優先し、取得できない場合も既存ログを示す。送信失敗は後始末を止めず再試行し、無効時は通知用権限・送信を要求しない。Slurm ジョブ通知の宛先とリソースは分離する。 | [test_autoscaling_failure_notification.py](../tests/test_autoscaling_failure_notification.py)：診断抽出、Work Request の絞り込み、再送、設定経路。OCI 上のメール配信・権限・Work Request の実形式は別途確認。 |
 
 ## 自動検証が未整備の振る舞い
 
@@ -55,6 +56,7 @@
 | REG-018 | AMD VMのHT On/Offを初期・動的ノードで確認する。Intel VMのHT Off拒否、HT Onの従来構成、BM制御を確認する。既存VMの構成更新だけでHTが変わったと判断しない。 |
 | REG-019 | [v1.3.1の検証・復旧手順](releases/v1.3.1.md)に従い、RUNNING / SUSPENDED / COMPLETING中の保護、通常アイドル削除、DRAIN中の状態変化、構築・削除中の見送り、受付不明時のDRAIN保持を確認する。REG-012の作成・permanent・上限確認も維持する。 |
 | REG-020 | 修正した `versions.tf` と `schema.yaml` が直下にあるフォルダ（または ZIP）から新規スタック作成画面を開く。Terraform バージョンが 1.5.x と認識され、`Invalid Terraform version: .` が表示されず変数設定へ進めることを確認する。作業ディレクトリを `autoscaling/tf_init/` にしない。ルート構成の Plan、コントローラの Terraform 1.5.0 以上での動的構成実行も対象に応じて確認する。 |
+| REG-021 | 通知の有効・無効と Slurm ジョブ通知の有効・無効を組み合わせ、専用 Topic / Subscription と必要な IAM だけが作成されることを Plan で確認する。Subscription 承認後、Instance Pool・Cluster Network・Compute Cluster の各作成失敗と Ansible 失敗で、削除前の原因、Work Request ID / error（取得可能な場合）、メールの到着、再送と後始末の継続を確認する。`-DEBUG`、Work Request 不在、通知無効、送信失敗も確認する。 |
 
 ## 台帳の更新方法
 

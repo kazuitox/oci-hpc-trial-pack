@@ -236,6 +236,7 @@ resource "null_resource" "controller" {
 resource "null_resource" "cluster" { 
   depends_on = [
     null_resource.controller,
+    null_resource.autoscaling_failure_notification_deploy,
     null_resource.backup,
     oci_core_compute_cluster.compute_cluster,
     oci_core_cluster_network.cluster_network,

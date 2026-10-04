@@ -15,6 +15,45 @@ resource "oci_identity_dynamic_group" "slurm_notification_controllers" {
   }
 }
 
+resource "oci_identity_dynamic_group" "autoscaling_failure_controllers" {
+  count          = var.autoscaling_failure_notifications_enabled ? 1 : 0
+  provider       = oci.home
+  compartment_id = var.tenancy_ocid
+  name           = "autoscaling_failure_controllers_${local.slurm_notification_identity_suffix}"
+  description    = "Controllers allowed to publish autoscaling creation failures for ${local.cluster_name}."
+  matching_rule  = local.slurm_notification_controller_matching_rule
+}
+
+resource "oci_identity_policy" "autoscaling_failure_controllers" {
+  count          = var.autoscaling_failure_notifications_enabled ? 1 : 0
+  provider       = oci.home
+  compartment_id = var.tenancy_ocid
+  name           = "autoscaling-failure-controllers-${local.slurm_notification_identity_suffix}"
+  description    = "Allows controllers to publish autoscaling creation failures."
+  statements = [
+    "Allow dynamic-group ${oci_identity_dynamic_group.autoscaling_failure_controllers[0].name} to use ons-topics in compartment id ${var.targetCompartment}",
+  ]
+}
+
+resource "oci_ons_notification_topic" "autoscaling_failure" {
+  count          = var.autoscaling_failure_notifications_enabled ? 1 : 0
+  compartment_id = var.targetCompartment
+  name           = "autoscaling-failure-${local.slurm_notification_identity_suffix}"
+  description    = "Autoscaling cluster creation failures for ${local.cluster_name}."
+  freeform_tags = {
+    "cluster_name" = local.cluster_name
+    "managed_by"   = "terraform"
+  }
+}
+
+resource "oci_ons_subscription" "autoscaling_failure_email" {
+  count          = var.autoscaling_failure_notifications_enabled ? 1 : 0
+  compartment_id = var.targetCompartment
+  topic_id       = oci_ons_notification_topic.autoscaling_failure[0].id
+  protocol       = "EMAIL"
+  endpoint       = local.autoscaling_failure_admin_email
+}
+
 resource "oci_identity_policy" "slurm_notification_controllers" {
   count          = var.slurm_job_notifications_enabled ? 1 : 0
   provider       = oci.home
