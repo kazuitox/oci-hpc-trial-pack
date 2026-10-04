@@ -1,0 +1,21 @@
+---
+- name: Restart accounting and controller in readiness order
+  any_errors_fatal: true
+  block:
+    # Prevent Requires=slurmdbd + Restart=always from racing accounting restart.
+    - name: Stop slurmctld before restarting accounting
+      become: true
+      service:
+        name: slurmctld
+        state: stopped
+      when: slurm_accounting_service_state | default('restarted') == 'restarted'
+
+    - name: Restart slurmdbd
+      become: true
+      service:
+        name: slurmdbd
+        state: "{{ slurm_accounting_service_state | default('restarted') }}"
+        enabled: true
+
+    - name: Start controller after accounting readiness
+      include_tasks: start-controller.yml

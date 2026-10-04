@@ -3,19 +3,16 @@
   ansible.builtin.systemd:
     daemon_reload: true
 
-- name: restart slurm server
+# Munge must use the final key before any accounting/controller RPC.
+- name: restart munge
   become: true
   service:
-    name: '{{ item }}'
+    name: munge
     state: restarted
     enabled: true
-  with_items:
-    - slurmdbd
-    - slurmctld
-  register: result
-  until: result is not failed
-  retries: 5
-  delay: 5
+
+- name: restart slurm server
+  include_tasks: ../tasks/restart-server.yml
 
 - name: restart slurm
   become: true
@@ -30,19 +27,5 @@
   retries: 5
   delay: 5
 
-- name: restart munge
-  become: true
-  service:
-    name: munge
-    state: restarted
-    enabled: true
-
-# seeing this error stderr: 'slurm_reconfigure error: Operation now in progress', that's why added retries
 - name: reconfigure slurm
-  become: true
-  command: "scontrol reconfigure"
-  delegate_to: 127.0.0.1
-  register: result
-  until: result is not failed
-  retries: 5
-  delay: 5
+  include_tasks: ../tasks/reconfigure.yml

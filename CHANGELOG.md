@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Resource Manager の初回構成で、SlurmDBD が DB 初期化を終える前に slurmctld を起動し、TRES 取得失敗で停止する競合を修正しました。cpu・mem TRES の取得後に起動し、サービスの active 状態に加えて scontrol ping の応答も待ちます。準備確認にはコマンド単位・全体の時間上限を設け、失敗時は理由を示して構成を停止します。
+- 同じ slurm.conf が残る失敗後の再構成でもサービス起動と準備確認を行います。HA バックアップは backup としての応答を確認し、通常版・軽量版の reconfigure もローカルクラスターの応答確認後に実行します。子プロセスの SLURM_CLUSTERS を除外し、既存の設定パス・DB 接続先・キュー・topology・状態ファイルを保持します。実行順と失敗時停止の Ansible スタブテスト、適用・実機確認手順を追加しました。OCI 上の新規デプロイと再構成は未検証です。
+
 ## [v1.3.2] - 2026-09-20
 
 ### Fixed
