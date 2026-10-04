@@ -94,152 +94,44 @@
   set_fact:
     rackID: "{{ rackID_script.stdout[1:-41]}}"
 
-- name: Get nodes from Inactive Switch
-  vars:
-    keyword: "{% for partition in queues %}{% for instance in partition.instance_types %}{% if instance.name == instance_type %}{{instance.instance_keyword}}{% endif %}{% endfor %}{% endfor %}"
-  shell: "cat {{ slurm_conf_path }}/topology.conf | grep \"SwitchName=inactive-{{queue}}-{{keyword}}\""
-  register: inactive_switch
-  run_once: true
-  delegate_to: 127.0.0.1
-
-- name: Get rackIDs for all compute nodes
+- name: Initialize topology node and rack lists
   set_fact:
-    racks_to_add_temp: "{{cluster_name}}:{{hostvars[item]['rackID']}}"
-  with_items: "{{ play_hosts | difference(groups['controller'])  | difference(groups['slurm_backup']) | difference(groups['login'])}}"
-  run_once: true
-  register: racks_to_add_temp_results
-
-- name: Make a list of racks to add
-  set_fact: racks_to_add="{{racks_to_add_temp_results.results | map(attribute='ansible_facts.racks_to_add_temp') | list | unique}}"
+    nodes_to_add: []
+    topology_racks: {}
   run_once: true
 
-- name: Get hostnames
+- name: Collect compute nodes and their rack switches
   set_fact:
-    nodes_to_add_temp: "{{hostvars[item]['ansible_hostname']}}"
+    nodes_to_add: "{{ (nodes_to_add | default([])) + [hostvars[item]['ansible_hostname']] }}"
+    topology_racks: "{{ (topology_racks | default({})) | combine({hostvars[item]['ansible_hostname']: cluster_name ~ ':' ~ hostvars[item]['rackID']}) }}"
   with_items: "{{ play_hosts | difference(groups['controller']) | difference(groups['slurm_backup']) | difference(groups['login']) }}"
   run_once: true
-  register: nodes_to_add_temp_results
 
-- name: Make a list of nodes to add
-  set_fact: nodes_to_add="{{nodes_to_add_temp_results.results | map(attribute='ansible_facts.nodes_to_add_temp') | list}}"
-  run_once: true
-
-- name: Get current nodes in Switch
-  shell: "cat {{ slurm_conf_path }}/topology.conf | grep \"{{item}}\" | grep Nodes="
-  register: nodes_in_switch
-  delegate_to: 127.0.0.1
-  run_once: true
-  with_items: "{{racks_to_add}}"
-  ignore_errors: yes
-
-- name: Get current nodes in Switch hostlist
-  vars:
-    switch_list_condensed: "{{item.stdout.split('Nodes=')[1]}}"
-  command: "scontrol show hostname {{switch_list_condensed }}"
-  register: switch_hostlist
-  delegate_to: 127.0.0.1
-  with_items: "{{nodes_in_switch.results}}"
-  when: item.rc == 0
-
-- name: Get hostlist if switch exists
-  vars:
-    new_line: "{% for node in ( play_hosts | difference(groups['controller']) | difference(groups['slurm_backup'])  | difference(groups['login']) ) %}{% if cluster_name+':'+hostvars[node]['rackID'] == item.item.item %}{{hostvars[node]['ansible_hostname']}},{% endif %}{% endfor %}"
-  command: "scontrol show hostlistsorted {{ item.stdout_lines | union (new_line[:-1].split(',') | list )| join(',') }}"
-  register: rack_hostlist1
-  delegate_to: 127.0.0.1
-  with_items: "{{switch_hostlist.results}}"
-  run_once: true
-  when: item.item.rc == 0
-
-- name: Get hostlist if switch does not exists
-  vars:
-    new_line: "{% for node in ( play_hosts | difference(groups['controller'])  | difference(groups['slurm_backup']) | difference(groups['login']) ) %}{% if cluster_name+':'+hostvars[node]['rackID'] == item.item.item %}{{hostvars[node]['ansible_hostname']}},{% endif %}{% endfor %}"
-  command: "scontrol show hostlistsorted {{ new_line[:-1] }}"
-  register: rack_hostlist2
-  delegate_to: 127.0.0.1
-  with_items: "{{switch_hostlist.results}}"
-  run_once: true
-  when: item.item.rc > 0
-
-- name: get Nodes on switch
+- name: Resolve the inactive switch for this queue and instance type
   set_fact:
-    nodes_on_switches: "{{nodes_on_switches | default({}) | combine({item.item.item.item : item.stdout } ) }}"
-  with_items: "{{rack_hostlist1.results}}"
+    topology_keywords: "{{ queues | selectattr('name', 'equalto', queue) | map(attribute='instance_types') | flatten | selectattr('name', 'equalto', instance_type) | map(attribute='instance_keyword') | list }}"
   run_once: true
-  delegate_to: 127.0.0.1
-  when: item.item.item.rc== 0
 
-- name: get Nodes on switch
-  set_fact:
-    nodes_on_switches: "{{nodes_on_switches | default({}) | combine({item.item.item.item : item.stdout } ) }}"
-  with_items: "{{rack_hostlist2.results}}"
+- name: Require one instance keyword
+  assert:
+    that:
+      - topology_keywords | length == 1
+      - topology_keywords[0] | length > 0
+    fail_msg: "Expected exactly one instance type in queue {{ queue }}"
   run_once: true
-  delegate_to: 127.0.0.1
-  when: item.item.item.rc > 0
 
-- name: Add the nodes in the rack switches
+- name: Update topology using exact switch identities
   become: true
-  lineinfile:
+  slurm_topology:
     path: "{{ slurm_conf_path }}/topology.conf"
-    regexp: "SwitchName={{item.item.item}}\\sNodes.*"
-    line: "SwitchName={{item.item.item}} Nodes={{nodes_on_switches[item.item.item]}}"
-    state: present
-  run_once: true
-  with_items: "{{switch_hostlist.results}}"
-  delegate_to: 127.0.0.1
-  notify: reconfigure slurm
-
-- name: Get inactive_hostlist
-  vars:
-    inactive_list_condensed: "{{inactive_switch.stdout.split('Nodes=')[1]}}"
-  command: "scontrol show hostname {{inactive_list_condensed }}"
-  register: inactive_hostlist
-  delegate_to: 127.0.0.1
-
-- name: Create new inactive_hostlist
-  command: "scontrol show hostlistsorted {{inactive_hostlist.stdout_lines | difference(nodes_to_add) | join(',')  }}"
-  register: inactive_hostlist_condensed
-  delegate_to: 127.0.0.1
-
-- name: remove nodes from inactive
-  become: true
-  vars:
-    inactive_list: "{{inactive_switch.stdout.split('Nodes=')[1].split(',')}}"
-    keyword: "{% for partition in queues %}{% for instance in partition.instance_types %}{% if instance.name == instance_type %}{{instance.instance_keyword}}{% endif %}{% endfor %}{% endfor %}"
-  lineinfile:
-    path: "{{ slurm_conf_path }}/topology.conf"
-    regexp: "SwitchName=inactive-{{queue}}-{{keyword}}\\sNodes.*"
-    line: "SwitchName=inactive-{{queue}}-{{keyword}} Nodes={{inactive_hostlist_condensed.stdout}}"
-    state: present
+    cluster: "{{ cluster_name }}"
+    inactive: "inactive-{{ queue }}-{{ topology_keywords[0] }}"
+    nodes: "{{ nodes_to_add }}"
+    action: "add"
+    racks: "{{ topology_racks }}"
   run_once: true
   delegate_to: 127.0.0.1
   notify: reconfigure slurm
-
-- name: Get racks in the Cluster
-  block:
-    - name: Get Racks from topology.conf
-      shell: "cat {{ slurm_conf_path }}/topology.conf | grep \"SwitchName={{cluster_name}}:\" | awk '{print $1}' | sed 's/SwitchName=//' | tr '\n' ',' | sed 's/,$/\\n/'"
-      register: racks_left
-      run_once: true
-      delegate_to: 127.0.0.1
-    - name: Create list of racks
-      set_fact:
-        racks_left_list: "{{racks_left.stdout.split(',') | list}}"
-  rescue:
-    - name: Empty racks
-      set_fact:
-        racks_left_list: []
-
-- name: Update Rack switches for the cluster
-  become: true
-  lineinfile:
-    path: "{{ slurm_conf_path }}/topology.conf"
-    regexp: "SwitchName={{cluster_name}}\\sSwitches.*"
-    line: "SwitchName={{cluster_name}} Switches={{ racks_left_list | join(',') }}"
-    state: present
-  run_once: true
-  delegate_to: 127.0.0.1
-  when: racks_left_list | length > 0
 
 - name: Run Pam settings
   include_tasks: compute_pam.yml

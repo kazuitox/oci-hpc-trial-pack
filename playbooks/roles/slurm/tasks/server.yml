@@ -230,7 +230,7 @@
   become: true
   lineinfile:
     path: "{{ slurm_conf_path }}/topology.conf"
-    regexp: "SwitchName=inactive-{{item}}\\sNodes.*"
+    regexp: "^SwitchName=inactive-{{ item | regex_escape }}\\s+Nodes=.*"
     state: absent
   check_mode: yes
   with_items: "{{nodesname_list}}"
@@ -245,7 +245,7 @@
     size: "{{ hostvars[inventory_hostname]['private_subnet'] | ipaddr('size') }}"
   lineinfile:
     path: "{{ slurm_conf_path }}/topology.conf"
-    regexp: "SwitchName=inactive-{{item.item}}\\sNodes.*"
+    regexp: "^SwitchName=inactive-{{ item.item | regex_escape }}\\s+Nodes=.*"
     line: "SwitchName=inactive-{{item.item}} Nodes={{item.item}}-node-[1-{{size}}]"
     state: present
   with_items: "{{shape_added.results}}"

@@ -25,6 +25,7 @@
 | REG-019 | 通常のAutoscalingの削除前にノード全体と未終了ジョブを確認し、DRAIN後に再確認する。時刻不明を架空のアイドル時間へ変換しない。削除起動前の失敗・受付前終了時は自分のDRAINだけを解除するよう試み、受付不明時は保持する。 | [test_autoscale_safe_delete.py](../tests/test_autoscale_safe_delete.py)：アイドル時刻、RUNNING / SUSPENDED / COMPLETING、障害状態、DRAIN中のジョブ変化、部分失敗、起動失敗・受付前終了・受付不明のモックテスト。実機のSlurm権限と削除受付のタイミングは別途確認。 |
 | REG-020 | Resource Manager 用のルート構成は `~> major.minor.0` 形式で Terraform 1.5.x を明示し、1.5 より前・1.6 以降を許可しない。コントローラで実行する Autoscaling 用構成は 1.5.0 以上を許可し続ける。provider の固定バージョンを維持する。 | [test_resource_manager_terraform_version.py](../tests/test_resource_manager_terraform_version.py)：ルート・動的構成のバージョン宣言の静的検査と、利用可能な Terraform CLI による provider 不要の最小構成の制約確認。[通知の後始末](../tests/test_slurm_notification_destroy_cleanup_terraform.py)：Terraform 1.5 系の最低要件。Resource Manager の画面側の自動判定は別途確認。 |
 | REG-021 | SlurmDBD が終了コード 0 と有効な cpu・mem TRES を返してから slurmctld を起動し、対象 primary / backup の ping 応答後に進む。確認コマンドと各待機を時間制限し、失敗・不正応答を成功扱いしない。同じ設定が残る失敗後の再構成でも起動を確認し、Slurm 無効時には追加処理しない。SLURM_CLUSTERS を子環境だけから除外し、SLURM_CONF と他の環境を保持する。 | [test_slurm_startup_readiness.py](../tests/test_slurm_startup_readiness.py)：実コマンドのタイムアウト・子プロセス終了、TRES / ping 応答検査、親環境の保持。実際の role ハンドラと待機タスクを Ansible で実行し、サービス・Slurm コマンドをスタブ化して遅延成功、期限切れ、起動・後続処理の停止、再構成、HA backup、Slurm 無効を確認。Ansible がない環境では実行順テストをスキップする。OS ごとのパス選択を一時パスへ差し替えて実行するため、実 Slurm・systemd・DB の検証は含まない。 |
+| REG-022 | Autoscaling の topology 更新はキュー・instance type と Switch 名を正確に区別し、`e5`／`e5-lite` が共存しても他方の一覧を変えない。必要な一覧の欠落・重複・展開失敗時は更新前に停止し、空一覧への退避で既存データを失わない。共通処理はロックと原子的置換で更新する。hostlist コマンドには `SLURM_CLUSTERS` を渡さず、`SLURM_CONF` などは保持する。 | [test_autoscaling_topology_identity.py](../tests/test_autoscaling_topology_identity.py)：完全一致、作成・削除・ラック・到達不能ノード回収、空一覧・欠落・重複・Slurm失敗・冪等性。Ansible 利用時は実タスクと Slurm スタブによる内容・権限保持・チェックモード・並行更新・空値／別クラスター名の環境変数除外を確認し、未導入時はその実行テストをスキップする。 |
 | REG-023 | `resize.sh` は実効ユーザーが `ubuntu` / `opc` の場合に `USER` 環境変数に依存せず処理を続け、root・許可外・ユーザー特定失敗時は非ゼロで副作用のある処理前に停止する。監視再同期の失敗は `configure_as.sh` に伝わり、再試行段階を保持する。 | [test_resize_user_check.py](../tests/test_resize_user_check.py)：実 Shell とコマンドスタブで `USER` の各値、許可・拒否、後続処理の到達、監視再同期の呼び出し結果を確認。実 OS アカウントと OCI は使用しない。 |
 
 ## 自動検証が未整備の振る舞い
@@ -59,6 +60,8 @@
 | REG-020 | 修正した `versions.tf` と `schema.yaml` が直下にあるフォルダ（または ZIP）から新規スタック作成画面を開く。Terraform バージョンが 1.5.x と認識され、`Invalid Terraform version: .` が表示されず変数設定へ進めることを確認する。作業ディレクトリを `autoscaling/tf_init/` にしない。ルート構成の Plan、コントローラの Terraform 1.5.0 以上での動的構成実行も対象に応じて確認する。 |
 | REG-021 | [Slurm の初期起動と再構成の待機](../README.md#slurm-の初期起動と再構成の待機)に従い、Ubuntu 24.04 / Oracle Linux 8 の新規 Resource Manager デプロイと通常の configure.sh 再実行を確認する。TRES → 起動 → 対象 controller の UP → reconfigure の順、同じ設定が残る再実行、HA backup の待機、Slurm 無効、通常版・軽量版の共有ハンドラを確認する。隔離した検証環境で DBD / controller の遅延成功と期限切れを確認し、失敗時に後続へ進まないこと、topology・状態ファイル・既存キューの保持も確認する。 |
 | REG-023 | Ubuntu と Oracle Linux 8 の各コントローラで `ubuntu` / `opc` として新規 Autoscaling クラスターを作成し、Ansible 後の監視再同期がユーザー判定エラーなく完了することを確認する。`USER` を外した手動の監視再同期も確認する。許可外ユーザーでの手動実行は処理が進まず非ゼロとなり、失敗時は `.initial-configure-stage` の `monitoring` 段階が残ることを確認する。 |
+
+REG-022 の実環境確認は[調査・更新手順](autoscaling-topology-identity.md#ローカル検証と実環境確認を分ける)を参照する。標準版・軽量版、ラック対応、到達不能ノード回収、HA 同期で対象の一覧だけが更新されることを確認する。
 
 ## 台帳の更新方法
 
