@@ -4,14 +4,21 @@
 
 ## [Unreleased]
 
+## [v1.3.3] - 2026-10-05
+
 ### Fixed
 
 - Autoscaling の監視再同期などで使う `resize.sh` の実行ユーザー判定を実効 UID とユーザー名に基づく判定へ変更しました。`USER` が未設定・空・不一致・空白入りでも許可された `ubuntu` / `opc` は実行でき、root・許可外・ユーザー特定失敗時は非ゼロで停止します。`create_cluster.sh` の root 拒否も非ゼロ終了に修正しました。
 - Resource Manager の初回構成で、SlurmDBD が DB 初期化を終える前に slurmctld を起動し、TRES 取得失敗で停止する競合を修正しました。cpu・mem TRES の取得後に起動し、サービスの active 状態に加えて scontrol ping の応答も待ちます。準備確認にはコマンド単位・全体の時間上限を設け、失敗時は理由を示して構成を停止します。
-- 同じ slurm.conf が残る失敗後の再構成でもサービス起動と準備確認を行います。HA バックアップは backup としての応答を確認し、通常版・軽量版の reconfigure もローカルクラスターの応答確認後に実行します。子プロセスの SLURM_CLUSTERS を除外し、既存の設定パス・DB 接続先・キュー・topology・状態ファイルを保持します。実行順と失敗時停止の Ansible スタブテスト、適用・実機確認手順を追加しました。OCI 上の新規デプロイと再構成は未検証です。
+- 同じ slurm.conf が残る失敗後の再構成でもサービス起動と準備確認を行います。HA バックアップは backup としての応答を確認し、通常版・軽量版の reconfigure もローカルクラスターの応答確認後に実行します。子プロセスの SLURM_CLUSTERS を除外し、既存の設定パス・DB 接続先・キュー・topology・状態ファイルを保持します。実行順と失敗時停止の Ansible スタブテスト、適用・実機確認手順を追加しました。
 - Autoscaling の topology 更新で `SLURM_CLUSTERS` に空文字を設定していた不具合を修正しました。Slurm が空のクラスター名を検索して作成・削除に失敗するため、子プロセスの環境からこの変数を除外します。`SLURM_CONF` などの設定は保持し、空値・別クラスター名の継承を検出する回帰テストを追加しました。
 - Autoscaling の標準版・軽量版・ラック対応版の作成／削除と到達不能ノード回収で、Switch 名を完全一致で扱います。`e5` と `e5-lite` の混同を防ぎ、必要な Switch の欠落・重複・Slurm コマンド失敗時に空一覧で topology を上書きしないようにしました。
 - topology 更新を共通の Ansible モジュールにまとめ、展開・圧縮を検証後、ロックを保持して原子的に置き換えます。既存のキーワード・名前・設定形式を維持します。既存環境では変更タスクと `playbooks/library/slurm_topology.py` を同時に配布してください。[調査・更新手順](docs/autoscaling-topology-identity.md)と共存・失敗時の回帰テストを追加しました。
+
+### Compatibility / 検証
+
+- v1.3.2 に `fix/resize-user-check`、`fix/slurm-startup-readiness`、`fix/autoscaling-exact-keyword` を統合したパッチです。Terraform・IAM・provider・既存のキュー設定や識別子は変更していません。
+- 統合後のローカル全件テストは543件、失敗0件、スキップ3件でした。利用者から動作確認完了の報告を受けています。確認したOS・構成・操作の詳細は未記録のため、HA・ラック対応など全構成の検証完了を示すものではありません。配布手順と検証範囲は[リリースノート](docs/releases/v1.3.3.md)を参照してください。
 
 ## [v1.3.2] - 2026-09-20
 
@@ -108,3 +115,5 @@
 [v1.3.0]: https://github.com/kazuitox/oci-hpc-trial-pack/releases/tag/v1.3.0
 
 [v1.3.1]: https://github.com/kazuitox/oci-hpc-trial-pack/releases/tag/v1.3.1
+
+[v1.3.3]: https://github.com/kazuitox/oci-hpc-trial-pack/releases/tag/v1.3.3

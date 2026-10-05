@@ -1,6 +1,6 @@
 # OCI HPC Trial Pack
 
-[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/kazuitox/oci-hpc-trial-pack/archive/refs/tags/v1.3.2.zip)
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/kazuitox/oci-hpc-trial-pack/archive/refs/tags/v1.3.3.zip)
 
 本リポジトリは、Oracle Cloud Infrastructure (OCI) 上に HPC 環境を短時間で構築し、PoC や初期検証をすばやく開始することを目的としています。
 この目的に合わせて、現時点では Oracle Linux 8 を対象 OS として動作確認しています。その他の OS やバージョンについては未検証のため、利用する場合は個別に検証してください。
@@ -16,7 +16,7 @@ Resource Manager 用のルート構成は Terraform **1.5.x** を対象にして
 - フォルダをアップロードするときは、`versions.tf`、`schema.yaml`、`variables.tf` が直下にあるリポジトリのルートを選択します。`autoscaling/tf_init/` はコントローラ上で実行する別構成なので選択しません。
 - アップロード後、スタック作成画面の Terraform バージョンが **1.5.x** になっていることを確認します。`Invalid Terraform version: .` が表示された場合は、修正済みの `versions.tf` を含むフォルダを再選択し、作業ディレクトリとバージョン欄を確認してください。画面側で値が空のままの場合は、選択状態・アップロード結果を別途確認する必要があります。
 - 手動 ZIP を使う場合も、同じファイルを ZIP のルート（または明示した作業ディレクトリ）に置きます。`.git`、`.terraform`、Terraform state、秘密鍵、実環境ログを含めないでください。未コミットの修正を試す場合、`git archive HEAD` では変更内容や新規ファイルが入りません。
-- 上のデプロイボタンは v1.3.2 を使います。未公開のローカル修正の試験には、更新後のフォルダまたは ZIP を使ってください。
+- 上のデプロイボタンは v1.3.3 を使います。未公開のローカル修正の試験には、更新後のフォルダまたは ZIP を使ってください。
 
 この上限制約はルート構成をローカル CLI で実行する場合にも適用されます。一方、Autoscaling 用の `autoscaling/tf_init/versions.tf` は Resource Manager でのバージョン選択には使わず、従来どおり Terraform **1.5.0 以上**を許可します。コントローラ側の Terraform を 1.5 系へ固定する変更ではありません。
 
@@ -34,11 +34,15 @@ Resource Manager 用のルート構成は Terraform **1.5.x** を対象にして
 
 `queues.conf` の `instance_keyword` は、`e5` と `e5-lite` のように一方が他方の先頭部分になる値も使えます。修正版は Switch 名を完全一致で照合し、必要な一覧の取得・展開に失敗した場合は `topology.conf` を更新しません。既存のキーワード・ノード名・クラスター名を維持します。 hostlist の展開・圧縮では `SLURM_CLUSTERS` を子プロセスの環境から除外し、コントローラーの `SLURM_CONF` は保持します。
 
-既存コントローラーへの更新では、変更した Ansible タスクと `playbooks/library/slurm_topology.py` を一緒に配布してください。修正箇所、失敗時の動作、配布・切り戻し、フォーク元との違いは[調査・更新手順](docs/autoscaling-topology-identity.md)にまとめています。実 OCI / Slurm での確認は別途必要です。
+既存コントローラーへの更新では、変更した Ansible タスクと `playbooks/library/slurm_topology.py` を一緒に配布してください。修正箇所、失敗時の動作、配布・切り戻し、フォーク元との違いは[調査・更新手順](docs/autoscaling-topology-identity.md)にまとめています。v1.3.3 の動作確認報告と検証範囲は[リリースノート](docs/releases/v1.3.3.md#検証結果と確認範囲)を参照してください。
+
+## v1.3.3への更新
+
+v1.3.3 は、Autoscaling の実行ユーザー判定、Slurm の起動待機、topology の Switch 名照合を修正したパッチです。既存コントローラには、新しい待機スクリプト・タスク・共通モジュールを含めて配布してください。変更内容、更新手順、検証範囲は[リリースノート](docs/releases/v1.3.3.md)にまとめています。上のデプロイボタンは v1.3.3 に固定しています。
 
 ## v1.3.2への更新
 
-v1.3.2は、新規Autoscalingノードの名前同期をSlurm起動前へ移し、OCI更新競合への限定的な再試行と構築途中からの再開を追加したパッチです。Resource ManagerのTerraformバージョン指定も修正しました。変更点と検証範囲は[リリースノート](docs/releases/v1.3.2.md)を参照してください。上のデプロイボタンはv1.3.2に固定しています。
+v1.3.2は、新規Autoscalingノードの名前同期をSlurm起動前へ移し、OCI更新競合への限定的な再試行と構築途中からの再開を追加したパッチです。Resource ManagerのTerraformバージョン指定も修正しました。変更点と検証範囲は[リリースノート](docs/releases/v1.3.2.md)を参照してください。
 
 ## v1.3.1への更新
 
