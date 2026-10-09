@@ -26,6 +26,72 @@ spec.loader.exec_module(secret)
 
 
 class OpenOnDemandUpgradeTests(unittest.TestCase):
+    def run_nodejs_tasks(self, listing, returncode=0):
+        ansible = shutil.which("ansible-playbook")
+        if not ansible:
+            sibling = Path(sys.executable).with_name("ansible-playbook")
+            ansible = str(sibling) if sibling.exists() else None
+        if not ansible:
+            self.skipTest("ansible-playbook is unavailable")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calls = root / "calls"
+            stub = root / "dnf.py"
+            # --enabled with no enabled stream reproduces the deployment failure.
+            stub.write_text(
+                "import sys\nfrom pathlib import Path\n"
+                f"calls = Path({str(calls)!r})\n"
+                "with calls.open('a') as out: out.write(' '.join(sys.argv[1:]) + '\\n')\n"
+                "if 'list' in sys.argv:\n"
+                "    if '--enabled' in sys.argv:\n"
+                "        print('Error: No matching Modules to list', file=sys.stderr)\n"
+                "        sys.exit(1)\n"
+                f"    print({listing!r})\n"
+                f"    sys.exit({returncode})\n"
+            )
+            all_tasks = yaml.safe_load((ROLE / "tasks/el8.yml").read_text())[0]["block"]
+            first = next(i for i, task in enumerate(all_tasks)
+                         if task.get("register") == "ood_nodejs_module")
+            tasks = all_tasks[first:first + 2]
+            tasks[0]["ansible.builtin.command"] = tasks[0]["ansible.builtin.command"].replace(
+                "dnf", f"{sys.executable} {stub}", 1)
+            for task in tasks[1]["block"]:
+                task["ansible.builtin.command"] = task["ansible.builtin.command"].replace(
+                    "dnf", f"{sys.executable} {stub}", 1)
+            play = root / "play.yml"
+            play.write_text(yaml.safe_dump([{
+                "hosts": "localhost", "connection": "local", "gather_facts": False,
+                "vars": {"ansible_python_interpreter": sys.executable}, "tasks": tasks}]))
+            env = dict(os.environ, ANSIBLE_LOCAL_TEMP=str(root / "ansible"))
+            result = subprocess.run([ansible, "-i", "localhost,", str(play)],
+                                    env=env, text=True, capture_output=True, timeout=60)
+            return result, calls.read_text().splitlines()
+
+    def test_nodejs_initial_and_old_stream_enable_22(self):
+        for listing in (
+            "nodejs 20 common [d] Javascript runtime\nnodejs 22 common [d] Javascript runtime",
+            "nodejs 20 [e] common [d] Javascript runtime\nnodejs 22 common [d] Javascript runtime",
+            "nodejs 22 [d][x] common [d] Javascript runtime",
+        ):
+            with self.subTest(listing=listing):
+                result, calls = self.run_nodejs_tasks(listing)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(calls, ["-q module list nodejs", "-y module reset nodejs",
+                                         "-y module enable nodejs:22"])
+
+    def test_nodejs_already_enabled_22_is_preserved(self):
+        for flags in ("[e]", "[d][e]"):
+            with self.subTest(flags=flags):
+                result, calls = self.run_nodejs_tasks(
+                    f"nodejs 20 common [d] Javascript runtime\nnodejs 22 {flags} common [d] Javascript runtime")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(calls, ["-q module list nodejs"])
+
+    def test_nodejs_repository_failure_stops_before_mutations(self):
+        result, calls = self.run_nodejs_tasks("Error: Failed to download repository metadata", 1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(calls, ["-q module list nodejs"])
+
     def test_real_ansible_secret_tasks_reuse_secret_without_logging_it(self):
         ansible = shutil.which("ansible-playbook")
         if not ansible:

@@ -78,13 +78,15 @@
       ansible.builtin.command: "dnf -y module enable ruby:3.3"
       changed_when: true
 
-    - name: Inspect enabled Node.js module stream
-      ansible.builtin.command: dnf -q module list --enabled nodejs
+    - name: Inspect available Node.js module streams
+      ansible.builtin.command: dnf -q module list nodejs
+      environment:
+        LC_ALL: C
       register: ood_nodejs_module
       changed_when: false
 
     - name: Switch Node.js module to 22 for Open OnDemand 4.2
-      when: ood_nodejs_module.stdout is not search('(?m)^nodejs\s+22\s')
+      when: ood_nodejs_module.stdout is not search('(?m)^nodejs\s+22\s+[^\r\n]*\[e\]')
       block:
         - name: Reset previous Node.js module stream
           ansible.builtin.command: dnf -y module reset nodejs
