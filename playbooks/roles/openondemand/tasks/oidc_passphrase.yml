@@ -1,0 +1,32 @@
+---
+- name: OpenOnDemand | Ensure protected configuration directory exists
+  ansible.builtin.file:
+    path: /etc/ood/config
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: OpenOnDemand | Generate or reuse local OIDC passphrase
+  ansible.builtin.script:
+    cmd: ood-oidc-passphrase.py /etc/ood/config/.oidc_crypto_passphrase
+    executable: python3
+  register: ood_oidc_passphrase_creation
+  changed_when: "'created' in ood_oidc_passphrase_creation.stdout"
+  when: not ansible_check_mode
+  no_log: true
+
+- name: OpenOnDemand | Protect persisted OIDC passphrase
+  ansible.builtin.file:
+    path: /etc/ood/config/.oidc_crypto_passphrase
+    owner: root
+    group: root
+    mode: "0600"
+  when: not ansible_check_mode
+
+- name: OpenOnDemand | Read local OIDC passphrase
+  ansible.builtin.slurp:
+    src: /etc/ood/config/.oidc_crypto_passphrase
+  register: ood_oidc_passphrase
+  when: not ansible_check_mode
+  no_log: true

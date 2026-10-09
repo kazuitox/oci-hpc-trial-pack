@@ -103,7 +103,6 @@
   loop:
     - activejobs
     - bc_desktop
-    - dashboard/app/apps
     - files
     - myjobs
     - shell
@@ -121,7 +120,6 @@
     - bc_desktop/form.yml
     - bc_desktop/manifest.yml
     - bc_desktop/submit.yml.erb
-    - dashboard/app/apps/ood_app.rb
     - files/manifest.yml
     - myjobs/manifest.yml
     - shell/manifest.yml

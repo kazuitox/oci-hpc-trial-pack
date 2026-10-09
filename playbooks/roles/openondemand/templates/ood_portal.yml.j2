@@ -1,6 +1,8 @@
 ---
 servername: "{{ ood_servername }}"
 
+oidc_crypto_passphrase: '{{ ood_oidc_passphrase.content | b64decode | trim }}'
+
 oidc_remote_user_claim: '{{ ood_oidc_remote_user_claim }}'
 user_map_cmd: '{{ ood_user_map_cmd }}'
 

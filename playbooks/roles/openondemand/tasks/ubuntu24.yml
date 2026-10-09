@@ -68,25 +68,26 @@
 
     - name: Download Open OnDemand repo release deb
       ansible.builtin.get_url:
-        url: "https://apt.osc.edu/ondemand/4.0/ondemand-release-web_4.0.0-noble_all.deb"
-        dest: /tmp/ondemand-release-web_4.0.0-noble_all.deb
+        url: "https://apt.osc.edu/ondemand/4.2/ondemand-release-web_4.2.0-noble_all.deb"
+        dest: /tmp/ondemand-release-web_4.2.0-noble_all.deb
         mode: "0644"
 
     - name: Install Open OnDemand repo release deb
       ansible.builtin.apt:
-        deb: /tmp/ondemand-release-web_4.0.0-noble_all.deb
+        deb: /tmp/ondemand-release-web_4.2.0-noble_all.deb
         state: present
 
     - name: Install Open OnDemand Dex login packages
       ansible.builtin.apt:
         name:
-          - ondemand
-          - ondemand-dex
+          - ondemand=4.2.5
+          - ondemand-dex=2.45.1
           - libapache2-mod-auth-openidc
           - libapache2-mod-authnz-pam
           - apache2-utils
         state: present
         update_cache: true
+      register: ood_package_install
 
     - name: Enable required Apache modules
       ansible.builtin.command: "a2enmod {{ item }}"
@@ -305,11 +306,18 @@
         group: root
         mode: "0755"
 
+    - name: OpenOnDemand | Prepare persistent OIDC passphrase
+      ansible.builtin.include_tasks: oidc_passphrase.yml
+
     - name: Deploy ood_portal.yml for Dex login
       ansible.builtin.template:
         src: ood_portal.yml.j2
         dest: /etc/ood/config/ood_portal.yml
-        mode: "0644"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      when: not ansible_check_mode
 
     - name: OpenOnDemand | Ensure apache2 systemd drop-in directory exists
       ansible.builtin.file:
@@ -324,9 +332,9 @@
         content: |
           [Service]
           ExecStartPre=
-          ExecStartPre=-/opt/ood/ood-portal-generator/sbin/update_ood_portal --insecure --force
+          ExecStartPre=/opt/ood/ood-portal-generator/sbin/update_ood_portal --insecure --force
           ExecReload=
-          ExecReload=-/opt/ood/ood-portal-generator/sbin/update_ood_portal --insecure --force
+          ExecReload=/opt/ood/ood-portal-generator/sbin/update_ood_portal --insecure --force
           ExecReload=/usr/sbin/apachectl graceful
       register: ood_httpd_portal_dropin
 
@@ -379,6 +387,9 @@
           - "oj-redwood-min.css"
           - "favicon.ico"
         ood_ux_config_url: "https://raw.githubusercontent.com/koiker/oci-hpc/master/artifacts/ondemand/oracle_ux.yml"
+
+    - name: OpenOnDemand | Install OpenComposer
+      ansible.builtin.include_tasks: opencomposer.yml
 
     - name: OpenOnDemand | Apply dashboard customizations
       ansible.builtin.include_tasks: ood_dashboard_customizations.yml
@@ -484,5 +495,9 @@
       ansible.builtin.service:
         name: apache2
         state: restarted
+
+    - name: OpenOnDemand | Verify and complete upgrade
+      ansible.builtin.include_tasks: finish_upgrade.yml
+      when: not ansible_check_mode
 
   become: true

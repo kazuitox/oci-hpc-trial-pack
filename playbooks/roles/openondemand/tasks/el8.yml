@@ -78,25 +78,43 @@
       ansible.builtin.command: "dnf -y module enable ruby:3.3"
       changed_when: true
 
-    - name: Enable module nodejs:20
-      ansible.builtin.command: "dnf -y module enable nodejs:20"
-      changed_when: true
+    - name: Inspect enabled Node.js module stream
+      ansible.builtin.command: dnf -q module list --enabled nodejs
+      register: ood_nodejs_module
+      changed_when: false
+
+    - name: Switch Node.js module to 22 for Open OnDemand 4.2
+      when: ood_nodejs_module.stdout is not search('(?m)^nodejs\s+22\s')
+      block:
+        - name: Reset previous Node.js module stream
+          ansible.builtin.command: dnf -y module reset nodejs
+          changed_when: true
+
+        - name: Enable Node.js 22 module stream
+          ansible.builtin.command: dnf -y module enable nodejs:22
+          changed_when: true
+
+    - name: Import Open OnDemand repository signing key
+      ansible.builtin.rpm_key:
+        key: https://yum.osc.edu/ondemand/RPM-GPG-KEY-ondemand
+        state: present
 
     - name: Install Open OnDemand repo release rpm
       ansible.builtin.dnf:
-        name: "https://yum.osc.edu/ondemand/4.0/ondemand-release-web-4.0-1.el8.noarch.rpm"
+        name: "https://yum.osc.edu/ondemand/4.2/ondemand-release-web-4.2-1.el8.noarch.rpm"
         state: present
-        disable_gpg_check: true
 
     - name: Install Open OnDemand Dex login packages
       ansible.builtin.dnf:
         name:
-          - ondemand
-          - ondemand-dex
+          - ondemand-4.2.5-1.el8
+          - ondemand-dex-2.45.1-1.el8
           - mod_auth_openidc
           - httpd-tools
           - mod_authnz_pam
         state: present
+        update_cache: true
+      register: ood_package_install
 
     - name: Enable and start httpd
       ansible.builtin.service:
@@ -302,11 +320,18 @@
         group: root
         mode: "0755"
 
+    - name: OpenOnDemand | Prepare persistent OIDC passphrase
+      ansible.builtin.include_tasks: oidc_passphrase.yml
+
     - name: Deploy ood_portal.yml for Dex login
       ansible.builtin.template:
         src: ood_portal.yml.j2
         dest: /etc/ood/config/ood_portal.yml
-        mode: "0644"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      when: not ansible_check_mode
 
     - name: OpenOnDemand | Ensure httpd systemd drop-in directory exists
       ansible.builtin.file:
@@ -321,9 +346,9 @@
         content: |
           [Service]
           ExecStartPre=
-          ExecStartPre=-/opt/ood/ood-portal-generator/sbin/update_ood_portal --insecure --force
+          ExecStartPre=/opt/ood/ood-portal-generator/sbin/update_ood_portal --insecure --force
           ExecReload=
-          ExecReload=-/opt/ood/ood-portal-generator/sbin/update_ood_portal --insecure --force
+          ExecReload=/opt/ood/ood-portal-generator/sbin/update_ood_portal --insecure --force
           ExecReload=/usr/sbin/httpd $OPTIONS -k graceful
       register: ood_httpd_portal_dropin
 
@@ -484,5 +509,9 @@
       ansible.builtin.service:
         name: httpd
         state: restarted
+
+    - name: OpenOnDemand | Verify and complete upgrade
+      ansible.builtin.include_tasks: finish_upgrade.yml
+      when: not ansible_check_mode
 
   become: true

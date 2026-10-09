@@ -1,5 +1,6 @@
 ---
 en:
   dashboard:
+    home_directory: "ホームディレクトリ"
     pinned_apps_title: "アプリ一覧"
     pinned_apps_caption_html: ": 利用する機能を選択してください"
