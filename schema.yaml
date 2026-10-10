@@ -26,6 +26,7 @@ variableGroups:
   - ${use_preinstalled_compute_image}
   - ${import_gpcpu_image_from_object_storage}
   - ${create_iam_policy_dynamic_group}
+  - ${cost_tags_enabled}
   - ${controller_ad}
   - ${use_custom_name}
   - ${cluster_name}
@@ -1886,12 +1887,20 @@ variables:
     title: SLURM をインストール
     default: true
     description: Autoscaling に必要です
+  cost_tags_enabled:
+    type: boolean
+    title: 利用者別の課金タグを有効化
+    default: true
+    description: Defined タグ hpc-cost.User の定義作成、初期・Autoscaling ノードへの付与、Slurm 利用者に応じた更新を有効にします。無効時は課金タグを付与・変更しません。初回デプロイ時に選択してください。既存のタグ定義は削除から保護されるため、有効から無効への変更は plan で停止します。
   slurm_user_tags_enabled:
     type: boolean
     title: Slurm の利用者を計算ノードの hpc-cost.User タグへ反映
     default: true
     description: ジョブ実行中は Slurm のユーザー名、未使用時は Management を設定します。Defined タグ hpc-cost.User を使用し、OCI Cost Analysis の利用者別表示を補助します。
-    visible: ${slurm}
+    visible:
+      and:
+      - ${slurm}
+      - ${cost_tags_enabled}
   slurm_job_notifications_enabled:
     type: boolean
     title: Slurm ジョブメール通知を有効化

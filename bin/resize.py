@@ -8419,7 +8419,7 @@ def generate_compute_cluster_launch_display_name(cluster_name):
     # 63-character DNS label limit regardless of the user-facing cluster name.
     return "cc-node-pending-"+uuid.uuid4().hex
 
-def getLaunchInstanceDetails(instance,comp_ocid,cn_ocid,new_display_name,local_block_volume_config):
+def getLaunchInstanceDetails(instance,comp_ocid,cn_ocid,new_display_name,local_block_volume_config,cost_tags_enabled=True):
 
     agent_config=instance.agent_config
     agent_config.__class__ = oci.core.models.LaunchInstanceAgentConfigDetails
@@ -8444,9 +8444,10 @@ def getLaunchInstanceDetails(instance,comp_ocid,cn_ocid,new_display_name,local_b
     launch_freeform_tags = dict(instance.freeform_tags or {})
     # The source node can be running another user's job. A new node has no
     # allocation yet and must not inherit that user's runtime cost ownership.
-    launch_freeform_tags.pop("user", None)
     launch_defined_tags = copy.deepcopy(instance.defined_tags or {})
-    launch_defined_tags.setdefault("hpc-cost", {})["User"] = "Management"
+    if cost_tags_enabled:
+        launch_freeform_tags.pop("user", None)
+        launch_defined_tags.setdefault("hpc-cost", {})["User"] = "Management"
     launch_freeform_tags.update({
         LOCAL_BLOCK_VOLUME_TAG_ENABLED: "true" if local_block_volume_config["enabled"] else "false",
         LOCAL_BLOCK_VOLUME_TAG_SIZE: str(local_block_volume_config["size_in_gbs"]),
@@ -9785,6 +9786,9 @@ else:
                             cn_ocid,
                             launch_display_name,
                             local_block_volume_config,
+                            cost_tags_enabled=parse_bool(get_inventory_variable(
+                                current_inventory, "cost_tags_enabled", "true"
+                            )),
                         )
                         refuse_terraform_state_mutation_while_locked(
                             os.path.dirname(os.path.abspath(inventory))

@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- 初回デプロイで `systemctl reset-failed slurmctld` が「unit は未読み込み」と返し、Slurm の起動前に停止する不具合を修正しました。終了コード 1 と対象 unit の所定のメッセージが一致する場合だけ起動へ進みます。権限エラー・タイムアウト・その他の失敗は引き続き停止し、unit の欠落や実際の起動失敗も後続処理で検出します。課金タグを無効にしたデプロイログで確認されたエラーへの対応です。
+
+### Added
+
+- 初回デプロイ時に課金タグ全体を選択できる `cost_tags_enabled`（既定値 `true`）を追加しました。Resource Manager の SIMPLE / ADVANCED 両モードで選択できます。無効時は `hpc-cost.User` の定義作成・初期ノードと Autoscaling ノードへの付与・Slurm 利用者による更新を行わず、ノード複製でも既存の課金タグを変更しません。所有権・一時 Block Volume の管理タグは維持します。
+- 課金タグ・IAM 自動作成・Slurm 通知がすべて無効の場合は、テナンシ／ホームリージョンの参照を省略します。既存のタグ定義の state アドレスは `moved` で引き継ぎ、`prevent_destroy` で削除を保護します。定義を含む既存スタックの無効化・destroy は保護の解除または管理元の引継ぎが必要です。更新だけを止める場合は、従来の `slurm_user_tags_enabled=false` を使用します。
+
 ## [v1.3.3] - 2026-10-05
 
 ### Fixed

@@ -8,7 +8,17 @@
     - name: Clear previous slurmctld start-limit failure
       become: true
       command: timeout --kill-after=2s 15s systemctl reset-failed slurmctld
+      register: slurmctld_reset_failed
+      environment:
+        LC_ALL: C
       changed_when: false
+      # reset-failed does not load an inactive unit on first deployment. The
+      # service task below still requires the installed unit to start correctly.
+      failed_when: >-
+        slurmctld_reset_failed.rc != 0 and not
+        (slurmctld_reset_failed.rc == 1 and
+         (slurmctld_reset_failed.stderr | trim) ==
+         'Failed to reset failed state of unit slurmctld.service: Unit slurmctld.service not loaded.')
 
     - name: Restart slurmctld
       become: true

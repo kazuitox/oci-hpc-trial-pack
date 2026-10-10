@@ -57,7 +57,8 @@ resource "null_resource" "backup" {
   count = var.slurm_ha ? 1 : 0
   depends_on = [oci_core_instance.backup] 
   triggers = merge({
-    slurm_user_tags_enabled = tostring(var.slurm && var.slurm_user_tags_enabled)
+    slurm_user_tags_enabled = tostring(var.slurm && var.cost_tags_enabled && var.slurm_user_tags_enabled)
+    cost_tags_enabled      = tostring(var.cost_tags_enabled)
     user_cost_tag_key       = local.user_cost_tag_key
     backup = oci_core_instance.backup[0].id
   }, var.slurm_job_notifications_enabled ? {
@@ -193,7 +194,8 @@ resource "null_resource" "cluster_backup" {
     oci_identity_policy.slurm_notification_controllers,
   ]
   triggers = merge({
-    slurm_user_tags_enabled = tostring(var.slurm && var.slurm_user_tags_enabled)
+    slurm_user_tags_enabled = tostring(var.slurm && var.cost_tags_enabled && var.slurm_user_tags_enabled)
+    cost_tags_enabled      = tostring(var.cost_tags_enabled)
     user_cost_tag_key       = local.user_cost_tag_key
     cluster_instances           = join(", ", local.cluster_instances_names)
     cluster_instance_ids        = join(", ", local.cluster_instances_ids)
@@ -249,7 +251,8 @@ resource "null_resource" "cluster_backup" {
       cluster_network = var.cluster_network,
       use_compute_agent = var.use_compute_agent,
       slurm = var.slurm,
-      slurm_user_tags_enabled = var.slurm && var.slurm_user_tags_enabled,
+      cost_tags_enabled = var.cost_tags_enabled,
+      slurm_user_tags_enabled = var.slurm && var.cost_tags_enabled && var.slurm_user_tags_enabled,
       slurm_job_notifications_enabled = var.slurm_job_notifications_enabled,
       slurm_notification_region = var.region,
       slurm_notification_compartment_id = var.targetCompartment,
@@ -411,7 +414,8 @@ resource "null_resource" "cluster_backup" {
       scratch_nfs_path = var.scratch_nfs_path,
       use_scratch_nfs = var.use_scratch_nfs,
       slurm = var.slurm,
-      slurm_user_tags_enabled = var.slurm && var.slurm_user_tags_enabled,
+      cost_tags_enabled = var.cost_tags_enabled,
+      slurm_user_tags_enabled = var.slurm && var.cost_tags_enabled && var.slurm_user_tags_enabled,
       slurm_job_notifications_enabled = var.slurm_job_notifications_enabled,
       slurm_notification_region = var.region,
       slurm_notification_compartment_id = var.targetCompartment,

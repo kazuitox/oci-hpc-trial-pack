@@ -40,6 +40,7 @@ local_block_volume_performance = ${local_block_volume_performance}
 local_block_volume_mount_point = ${local_block_volume_mount_point}
 cluster_network = ${cluster_network}
 slurm = ${slurm}
+cost_tags_enabled=${cost_tags_enabled}
 slurm_user_tags_enabled=${slurm_user_tags_enabled}
 slurm_job_notifications_enabled=${slurm_job_notifications_enabled}
 slurm_notification_region=${jsonencode(slurm_notification_region)}

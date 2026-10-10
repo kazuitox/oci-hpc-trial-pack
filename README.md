@@ -65,7 +65,7 @@ v1.3.0はホスト名同期、AMD VMのHT制御、Slurmユーザー別コスト�
 ## IAM とポリシー
 
 スタックを実行するユーザーは、Administratorsグループに所属していることを想定しており、それによりデフォルトでオートスケーリングの利用に必要なポリシーと動的グループを自動で追加します。このオプションを有効にする場合は、テナンシのホームリージョンを参照し、IAM Policy / Dynamic Groupを作成するためのテナンシレベルの権限が必要です。
-Administratorグループの権限がない場合には【Autoscaling 用 IAM Policy / Dynamic Group を作成】のチェックを外し、テナント管理者にて以下のポリシーと動的グループを適切に設定をしてください。オプションを無効にすると、Autoscaling用のIAM Policy / Dynamic Groupは作成しません。Definedタグ`hpc-cost.User`の定義は引き続き作成するため、スタック実行者にはテナンシとホームリージョンを参照する権限、およびデプロイ先コンパートメントの`tag-namespaces`を管理する権限が必要です。名前空間・キーの作成にはホームリージョンを使用します。
+Administratorグループの権限がない場合には【Autoscaling 用 IAM Policy / Dynamic Group を作成】のチェックを外し、テナント管理者にて以下のポリシーと動的グループを適切に設定をしてください。オプションを無効にすると、Autoscaling用のIAM Policy / Dynamic Groupは作成しません。課金タグを使わない初回デプロイでは【利用者別の課金タグを有効化】（`cost_tags_enabled`）も外してください。課金タグが有効な場合は、スタック実行者にはテナンシとホームリージョンを参照する権限、およびデプロイ先コンパートメントの`tag-namespaces`を管理する権限が必要です。名前空間・キーの作成にはホームリージョンを使用します。
 
 ポリシー1:
 ```text
@@ -189,9 +189,15 @@ Slurm の状態を初期状態に戻したい場合は、次を実行します�
 
 ## ユーザー別のコストタグ
 
-`slurm_user_tags_enabled`（既定値 `true`）を有効にすると、SlurmのProlog／Epilogで計算ノードの利用者を記録し、コントローラーがOCIのDefinedタグ`hpc-cost.User`へ反映します。作成時とアイドル時の値は`Management`、ジョブ実行中はSlurmのユーザー名です。ジョブIDをOCIタグへ追加することはありません。
+Resource Manager の「基本設定」にある【利用者別の課金タグを有効化】（`cost_tags_enabled`、既定値 `true`）で、初回デプロイ時に課金タグの使用を選べます。SIMPLE / ADVANCED の両モードで表示します。
 
-Terraformがデプロイ先コンパートメント（`targetCompartment`）に名前空間`hpc-cost`とキー`User`を作成します。キーの値型はStatic value（任意の文字列）です。初期ノードとAutoscalingで作成するノードの両方に同じDefinedタグを使用します。`slurm_user_tags_enabled=false`でも名前空間・キーとノード作成時のタグ付与は維持し、ジョブに応じた更新だけを停止します。
+`cost_tags_enabled=false` では課金タグの定義を作成せず、初期ノード・Autoscaling ノードへの `hpc-cost.User` の付与とジョブに応じた更新を行いません。ノード複製時も課金タグを追加・初期化せず、複製元のタグを保持します。クラスターの所属判定や削除制御、一時 Block Volume の管理タグは従来どおり使用します。
+
+`cost_tags_enabled=true` かつ `slurm_user_tags_enabled=true`（どちらも既定値）にすると、SlurmのProlog／Epilogで計算ノードの利用者を記録し、コントローラーがOCIのDefinedタグ`hpc-cost.User`へ反映します。作成時とアイドル時の値は`Management`、ジョブ実行中はSlurmのユーザー名です。ジョブIDをOCIタグへ追加することはありません。
+
+課金タグが有効な場合、Terraformがデプロイ先コンパートメント（`targetCompartment`）に名前空間`hpc-cost`とキー`User`を作成します。キーの値型はStatic value（任意の文字列）です。初期ノードとAutoscalingで作成するノードの両方に同じDefinedタグを使用します。`cost_tags_enabled=true` かつ `slurm_user_tags_enabled=false` では名前空間・キーとノード作成時のタグ付与は維持し、ジョブに応じた更新だけを停止します。
+
+既存スタックは `cost_tags_enabled=true` のまま更新できます。タグ定義の state アドレスは `moved` ブロックで引き継ぎます。定義を誤って削除しないよう `prevent_destroy` で保護するため、既存の有効構成を `cost_tags_enabled=false` へ変更する plan や、タグ定義を含む destroy は停止します。更新だけを停止したい場合は `slurm_user_tags_enabled=false` を指定してください。スタック削除時の定義の扱いは[運用手順](docs/slurm-user-cost-tags.md#既存環境からの移行)を参照してください。
 
 `queues.conf`の`tags`とスタックの`tags`変数の既定値も`Management`です。Cost Analysisでは名前空間`hpc-cost`、キー`User`を選んでユーザー別に集計します。対象は計算ノードのCompute費用で、ブートボリュームや共有ストレージの費用配賦は別途必要です。
 
@@ -402,9 +408,11 @@ Slurm 23.02.5 では、SlurmDBD のサービスが起動していても、DB の
 
 1. slurmctld を停止し、SlurmDBD を再起動する。
 2. root 権限で `sacctmgr -nP show tres format=Type,Name,ID` を実行し、終了コード 0、3 列の応答、有効な正整数 ID、名前が空の `cpu`・`mem` TRES を確認する。
-3. `systemctl reset-failed slurmctld` で前回の起動回数制限を解除し、slurmctld を再起動する。
+3. `systemctl reset-failed slurmctld` で前回の起動回数制限を解除し、slurmctld を再起動する。初回起動などで終了コード 1 と `Unit slurmctld.service not loaded.` の所定のメッセージだけが返った場合は、起動へ進む。権限エラーやタイムアウトなど、それ以外の失敗では停止する。
 4. `scontrol ping` の終了コード 0 と `Slurmctld(primary) ... is UP` を確認する。
 5. reconfigure ハンドラでも primary の応答を確認してから、`scontrol reconfigure` を実行する。
+
+`reset-failed` の未読み込みメッセージを許容しても、続くサービス起動と ping 確認は省略しません。unit ファイルの欠落や起動失敗は、その段階で停止します。この処理は課金タグの有効・無効に依存しません。
 
 前回の構成が失敗し、同じ slurm.conf が残っている場合も、SlurmDBD の起動・TRES 確認・slurmctld の起動・ping 確認を行います。この経路のサービス操作は `started` で、稼働中のサービスを再起動しません。HA のバックアップは、primary の SlurmDBD から TRES を取得してから起動し、`Slurmctld(backup) ... is UP` を確認します。バックアップの primary への昇格は要求しません。
 
