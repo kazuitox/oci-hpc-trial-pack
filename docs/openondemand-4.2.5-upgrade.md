@@ -74,3 +74,20 @@ Oracle Linux 8 の新規構築で `Inspect enabled Node.js module stream` が `N
 - [4.1 更新時の Node.js 22 への切り替え](https://osc.github.io/ood-documentation/latest/release-notes/v4.1-release-notes.html#upgrade-instructions)
 - [OIDC 暗号用秘密値の要件](https://github.com/OSC/ondemand/security/advisories/GHSA-3wm4-r2jj-43pp)
 - [回帰確認台帳](REGRESSION_LEDGER.md)
+
+## Ubuntu 24.04 の VNC デスクトップ
+
+Ubuntu 24.04 の `bc_desktop/template/script.sh.erb` はリポジトリの管理ファイルとして配布します。Xfce の場合は `SESSION_MANAGER` を解除し、`desktops/xfce.sh` 全体を `dbus-run-session -- bash` で実行します。初期設定の `xfconf-query` も同じ専用 D-Bus を使用します。他のデスクトップは `source` を維持します。SAFE_PATH は OOD 4.2.5 の標準処理を保持します。
+
+デスクトップの終了コードは保存し、ログへ表示してから起動スクリプトの終了コードとして返します。OOD のジョブ全体を管理するラッパーは失敗時に別の非ゼロ値を返す場合があるため、Slurm の数値がデスクトップの終了コードと一致するとは限りません。
+
+Ubuntu VNC 計算ノードを構成する `desktop` role で `dbus-daemon` を導入します。初期ノード、通常版・軽量版の Autoscaling ノードが対象です。既存ノードは `command -v dbus-run-session` で確認し、不足時は管理者が `sudo apt-get install dbus-daemon` を実行してください。Open OnDemand 専用 playbook だけでは計算ノードのパッケージは更新されません。
+
+確認は、更新した role をコントローラへ配布・再実行した後、新しい VNC ジョブで行います。
+
+1. 新規ジョブの `script.sh` に `OOD desktop D-Bus isolation fix v1` があり、ブラウザーから Xfce に接続できることを確認する。
+2. 同一ユーザーで同じノード上に複数セッションを起動できる構成では、片方の起動・終了で他方のパネルや設定プロセスが終了しないことを確認する。
+3. デスクトップから通常のログアウトを行い、ログの終了コードと Slurm の状態を確認する。異常終了の検証は専用の検証アプリで行い、起動スクリプトが非ゼロを返し、Slurm にも失敗が反映されることを確認する。
+4. Ubuntu の他のデスクトップは `source` を使用し、OL8 にはこの修正版テンプレートが配布されないことを確認する。
+
+利用者の Ubuntu 24.04 稼働環境では、同じ起動スクリプト修正後にブラウザーから VNC デスクトップへ接続できたとの報告を受けています。リポジトリからの再配布、依存パッケージの新規導入、複数セッション、異常終了時の Slurm 状態は別途確認が必要です。

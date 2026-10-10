@@ -28,6 +28,7 @@
 | REG-022 | Autoscaling の topology 更新はキュー・instance type と Switch 名を正確に区別し、`e5`／`e5-lite` が共存しても他方の一覧を変えない。必要な一覧の欠落・重複・展開失敗時は更新前に停止し、空一覧への退避で既存データを失わない。共通処理はロックと原子的置換で更新する。hostlist コマンドには `SLURM_CLUSTERS` を渡さず、`SLURM_CONF` などは保持する。 | [test_autoscaling_topology_identity.py](../tests/test_autoscaling_topology_identity.py)：完全一致、作成・削除・ラック・到達不能ノード回収、空一覧・欠落・重複・Slurm失敗・冪等性。Ansible 利用時は実タスクと Slurm スタブによる内容・権限保持・チェックモード・並行更新・空値／別クラスター名の環境変数除外を確認し、未導入時はその実行テストをスキップする。 |
 | REG-023 | `resize.sh` は実効ユーザーが `ubuntu` / `opc` の場合に `USER` 環境変数に依存せず処理を続け、root・許可外・ユーザー特定失敗時は非ゼロで副作用のある処理前に停止する。監視再同期の失敗は `configure_as.sh` に伝わり、再試行段階を保持する。 | [test_resize_user_check.py](../tests/test_resize_user_check.py)：実 Shell とコマンドスタブで `USER` の各値、許可・拒否、後続処理の到達、監視再同期の呼び出し結果を確認。実 OS アカウントと OCI は使用しない。 |
 | REG-024 | OOD は 4.2.5 / Dex 2.45.1 を導入し、旧標準 Ruby ファイルで上書きしない。OIDC 秘密値を安全に生成・永続化し、再実行・同時実行で値を保持する。破損時は停止する。更新完了まで PUN の更新を再試行する。 | [test_openondemand_upgrade.py](../tests/test_openondemand_upgrade.py)：秘密値生成・永続化・権限・並行処理・破損／symlink 拒否、認証別テンプレート生成、パッケージ指定・完了処理の静的検査、実 Ansible と DNF スタブによる Node.js 未有効／旧版／無効から22への切替・22の保持・取得障害時の停止、Ansible の実タスクによる秘密値保持とログ非露出（未導入時はスキップ）。パッケージ更新やブラウザー操作は含まない。 |
+| REG-025 | Ubuntu 24.04 の bc_desktop は Xfce の初期設定を含むスクリプト全体を専用 D-Bus 内で実行し、SESSION_MANAGER を継承しない。SAFE_PATH・他のデスクトップの source 方式を保持し、終了コードを返す。依存不足は127で停止する。Ubuntu VNC ノードのみ依存パッケージを導入し、OL8 は変更しない。 | [test_bc_desktop_session.py](../tests/test_bc_desktop_session.py)：Ruby ERB レンダリングと bash -n、D-Bus スタブと実 Bash による初期設定の分離・SAFE_PATH・終了コード0/1/42/143・SIGTERM・source・依存不足、配布条件と初期／動的ノードの role 呼び出しの静的検査。実 D-Bus・Xfce・Slurm は使用しない。 |
 
 ## 自動検証が未整備の振る舞い
 
@@ -52,6 +53,7 @@
 | REG-005 / REG-006 | 通常更新で後始末が発火しないことを確認する。スタック削除の検証では、動的に作成された対象 Topic が削除され、対象外・保護対象 Topic が後始末処理から除外される。 |
 | REG-007 / REG-008 / REG-009 / REG-011 / REG-024 | [4.2.5 更新手順](openondemand-4.2.5-upgrade.md)に従い、4.0 系からの更新・再実行・認証と秘密値保持を確認する。OOD にログインし、メニュー・History・ヘッダー・CPU 表示を確認する。変更した実行プロファイルで生成スクリプトを確認し、小規模ジョブの完了を確認する。 |
 | REG-012 | ジョブの constraint / partition に合うクラスターが作成されること、アイドル削除、permanent の保持、設定上限の適用を確認する。 |
+| REG-025 | [Ubuntu VNC の確認手順](openondemand-4.2.5-upgrade.md#ubuntu-2404-の-vnc-デスクトップ)に従い、新規ジョブのブラウザー接続、同一ユーザーの複数セッション、ログアウトと異常終了時の Slurm 状態を確認する。OL8 に修正版テンプレートが配布されないことも確認する。 |
 | REG-014 | 変更した CPU / GPU・VNC / DCV の組合せでデスクトップジョブを投入し、所定のキュー、ノード構成、ブラウザー接続を確認する。旧設定を使う更新でも互換動作が保たれる。 |
 | REG-015 | 対象となる IAM / 通知設定の組合せで Terraform の参照と権限要求を確認する。タグ定義に必要な参照と、それ以外の機能に由来する参照を区別する。 |
 | REG-016 | [ユーザー別コストタグの検証手順](slurm-user-cost-tags.md#検証手順)に従い、デプロイ先コンパートメントに`hpc-cost`とStatic valueの`User`が作成されること、初期ノード・Autoscalingノードで`Management`→ユーザー名→`Management`へ反映されることを確認する。複数ユーザー共有時は対象キーのみ除去し、他タグを保持する。フラグ無効時も定義と作成時タグは残り、非同期更新だけが停止する。既存のfreeformタグからの更新とIAM外部管理時の必要権限も確認する。 |

@@ -499,6 +499,10 @@ Destroy 開始後は `cluster user add` など、通知リソースを新しく�
 
 本体と Dex はバージョンを固定し、既存環境の再構成でも指定版へ更新します。認証用の `oidc_crypto_passphrase` はコントローラ上で生成・保存して再利用します。既存 4.0 系からの更新では Node.js 22 への切り替えと Web セッションの再起動を伴います。[4.2.5 への更新・復旧手順](docs/openondemand-4.2.5-upgrade.md)を確認し、検証環境で独自アプリの動作を確認してから適用してください。
 
+Ubuntu 24.04 の VNC デスクトップでは、Xfce の初期設定と起動をジョブ専用の D-Bus セッション内で実行します。他のデスクトップは従来の `source` 方式を使用し、いずれもデスクトップの終了コードを起動スクリプトから返します。必要な `dbus-daemon` は Ubuntu の VNC 計算ノードの構築時に導入します。Oracle Linux 8 の起動テンプレートとパッケージ構成は変更しません。
+
+既存の Ubuntu 環境へ適用する場合は、コントローラへ更新した `playbooks/` を配布して Open OnDemand role を再実行し、VNC 計算ノードで `command -v dbus-run-session` が成功することを確認してください。不足する既存ノードでは `sudo apt-get install dbus-daemon` が必要です。変更は新しく投入するデスクトップジョブに反映されます。実行中・投入済みのジョブの出力ディレクトリにあるスクリプトは更新されません。[Ubuntu VNC の確認手順](docs/openondemand-4.2.5-upgrade.md#ubuntu-2404-の-vnc-デスクトップ)も参照してください。
+
 ブラウザシェルの無操作タイムアウトは30分です。接続の最大継続時間はOpen OnDemandのデフォルトである1時間のままです。
 
 `use_ood`を有効にするとVNC用の`vnc`パーティション（Constraint: `dskv`、instance keyword: `desktop-v`）を作成します。Oracle Linux 8で`ood_dcv_enabled`も有効にすると、DCV専用の`dcv`パーティション（Constraint: `dskd`、instance keyword: `desktop-d`）と「Linux Desktop with Amazon DCV（検証用）」を追加します。VNCジョブは`vnc`、DCVジョブは`dcv`へ投入され、ノード構築時のAnsibleもキュー名に応じてTurboVNCまたはAmazon DCVだけを構成します。
