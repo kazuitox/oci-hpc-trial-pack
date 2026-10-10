@@ -100,6 +100,8 @@ class AnsibleOrderTests(unittest.TestCase):
 import os,json
 m=AnsibleModule(argument_spec=dict(name=dict(required=True),state=dict(required=True),enabled=dict(type='bool')))
 with open(os.environ['EVENT_LOG'],'a') as f: f.write(json.dumps(dict(kind='service',**m.params))+'\\n')
+if os.environ['SCENARIO'] == 'missing_unit' and m.params['name'] == 'slurmctld' and m.params['state'] != 'stopped':
+    m.fail_json(msg='Could not find the requested service slurmctld')
 m.exit_json(changed=True)
 ''')
             bins = base / 'bin'
@@ -111,8 +113,23 @@ from pathlib import Path
 kind = Path(sys.argv[0]).name
 with open(os.environ['EVENT_LOG'],'a') as f:
     f.write(json.dumps(dict(kind=kind,args=sys.argv[1:],clusters=os.environ.get('SLURM_CLUSTERS'),conf=os.environ.get('SLURM_CONF'),keep=os.environ.get('KEEP_ME')))+'\\n')
-if kind == 'systemctl': sys.exit(0)
 scenario = os.environ['SCENARIO']
+if kind == 'systemctl':
+    message = 'Failed to reset failed state of unit slurmctld.service: Unit slurmctld.service not loaded.'
+    if scenario in ('unit_not_loaded', 'missing_unit', 'reset_wrong_rc'):
+        print(message, file=sys.stderr)
+        sys.exit(2 if scenario == 'reset_wrong_rc' else 1)
+    if scenario == 'reset_permission':
+        print('Failed to reset failed state of unit slurmctld.service: Access denied', file=sys.stderr)
+        sys.exit(1)
+    if scenario == 'reset_timeout': sys.exit(124)
+    if scenario == 'reset_other_unit':
+        print(message.replace('slurmctld.service', 'other.service'), file=sys.stderr)
+        sys.exit(1)
+    if scenario == 'reset_mixed_errors':
+        print(message + ' Additional failure', file=sys.stderr)
+        sys.exit(1)
+    sys.exit(0)
 state = Path(os.environ['EVENT_LOG']+'.'+kind)
 count = int(state.read_text())+1 if state.exists() else 1
 state.write_text(str(count))
@@ -186,6 +203,36 @@ else:
                 self.assertIsNone(e['clusters'])
                 self.assertTrue(e['conf'].endswith('/conf/slurm.conf'))
                 self.assertEqual(e['keep'], 'preserved')
+
+    def test_first_start_with_unloaded_unit_continues_to_ready_controller(self):
+        for distribution, backup in (('OracleLinux', False), ('Ubuntu', False), ('OracleLinux', True)):
+            with self.subTest(distribution=distribution, backup=backup):
+                result, events = self.run_play('unit_not_loaded', distribution=distribution, backup=backup)
+                self.assertEqual(result.returncode, 0, result.stdout)
+                reset = next(i for i, event in enumerate(events) if event['kind'] == 'systemctl')
+                started = next(i for i, event in enumerate(events)
+                               if event.get('name') == 'slurmctld' and event.get('state') == 'restarted')
+                self.assertLess(reset, started)
+                self.assertTrue(any(event.get('args') == ['ping'] for event in events[started:]))
+                self.assertTrue(any(event.get('args') == ['reconfigure'] for event in events[started:]))
+                self.assertEqual(events[-1].get('args'), ['after'])
+
+    def test_reset_errors_still_block_start_and_followup(self):
+        for scenario in ('reset_permission', 'reset_timeout', 'reset_other_unit',
+                         'reset_wrong_rc', 'reset_mixed_errors'):
+            with self.subTest(scenario=scenario):
+                result, events = self.run_play(scenario)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn('Clear previous slurmctld start-limit failure', result.stdout)
+                self.assertFalse(any(event.get('name') == 'slurmctld' and
+                                     event.get('state') == 'restarted' for event in events))
+                self.assertFalse(any(event['kind'] == 'scontrol' for event in events))
+
+    def test_unloaded_unit_does_not_hide_missing_service(self):
+        result, events = self.run_play('missing_unit')
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('Could not find the requested service slurmctld', result.stdout)
+        self.assertFalse(any(event['kind'] == 'scontrol' for event in events))
 
     def test_accounting_failure_blocks_controller_and_followup(self):
         for scenario in ('dbd_fail', 'dbd_invalid', 'dbd_bad_rc', 'dbd_hang'):

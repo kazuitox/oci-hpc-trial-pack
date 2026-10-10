@@ -37,6 +37,10 @@ variable "zone_name" {default = "${zone_name}"}
 variable "dns_entries" {default = "${dns_entries}"}
 variable "healthchecks" {default = "${healthchecks}"}
 variable "slurm" { default = ${slurm} }
+variable "cost_tags_enabled" {
+  type = bool
+  default = ${cost_tags_enabled}
+}
 variable "slurm_user_tags_enabled" {
   type = bool
   default = ${slurm_user_tags_enabled}

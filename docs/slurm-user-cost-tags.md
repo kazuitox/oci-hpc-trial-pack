@@ -11,7 +11,9 @@
 
 ## 設定と前提
 
-- スタックの`slurm_user_tags_enabled`は既定値`true`です。Slurmを有効にした構成でジョブに応じた更新を行います。Terraformはこのフラグにかかわらず、デプロイ先コンパートメント（`targetCompartment`）へ以下の名前空間とキーを作成します。初期ノードとAutoscalingで作成するノードの両方へ`hpc-cost.User`を付与します。
+- 初回デプロイ時に `cost_tags_enabled`（既定値 `true`）で課金タグ全体の有効・無効を選びます。Resource Manager の「基本設定」にある【利用者別の課金タグを有効化】は SIMPLE / ADVANCED の両モードで表示します。有効時は、デプロイ先コンパートメント（`targetCompartment`）に以下の定義を作成し、初期ノード・Autoscaling ノードへ `hpc-cost.User` を付与します。
+- `cost_tags_enabled=false` では定義の作成・課金タグの付与・Slurm による更新を行いません。Autoscaling のノード複製でも課金タグの初期化や旧 `user` タグの削除を行わず、複製元のタグを保持します。所有権や一時 Block Volume の管理タグは従来どおりです。
+- `slurm_user_tags_enabled`（既定値 `true`）はジョブに応じた更新だけを制御します。`cost_tags_enabled` と Slurm も有効な場合にフック・ワーカーを配置します。以下の共有領域とコントローラー用 OCI CLI は、この更新処理を有効にした場合の要件です。
 - `queues.conf`の`tags`、スタックの`tags`変数、省略時の作成処理は`Management`を既定値にします。明示的なキュー設定や作成コマンドのタグ指定は引き続き優先されます。この機能の初期値にそろえる場合は、それらも`Management`にしてください。
 - コントローラーと計算ノードが同じ`slurm_nfs_path`を共有している必要があります。その配下の`oci-user-tags`をroot所有・0700で使用します。NFSのroot書き込みを禁止する独自構成では、この共有領域への書き込み権限を整えてください。
 - 計算ノードではPython 3とIMDSv2を使用します。OCI CLIはコントローラーと予備コントローラーのroot管理環境`/opt/slurm-oci-user-tags/venv`へ配置します。
@@ -28,7 +30,7 @@ Static valueはタグ値を固定する設定ではありません。`Management
 
 ### IAM
 
-Terraformを実行するユーザーまたはResource Principalには、テナンシとホームリージョンを参照する権限、および対象コンパートメントの`tag-namespaces`を管理する権限が必要です。名前空間・キーはホームリージョンのAPIで作成し、所属コンパートメントは`targetCompartment`とします。これらはIAM自動作成オプションと`slurm_user_tags_enabled`が無効でも必要です。コントローラーのInstance Principalには、対象インスタンスの参照・更新権限に加え、`hpc-cost`名前空間の`use tag-namespaces`権限が必要です。通常のIAM自動作成ではスタックのポリシーを使用します。IAMを外部管理する場合は、以下の権限を追加してください。[OCI APIごとの必要権限](https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-Permissions_Required_for_Each_API_Operation.htm)、[Definedタグの必要権限](https://docs.oracle.com/en-us/iaas/Content/Tagging/Tasks/managingtagsandtagnamespaces.htm)
+`cost_tags_enabled=true` の場合、Terraformを実行するユーザーまたはResource Principalには、テナンシとホームリージョンを参照する権限、および対象コンパートメントの`tag-namespaces`を管理する権限が必要です。名前空間・キーはホームリージョンのAPIで作成し、所属コンパートメントは`targetCompartment`とします。課金タグが有効なら、IAM自動作成オプションと`slurm_user_tags_enabled`が無効でも必要です。課金タグ・IAM自動作成・Slurm通知をすべて無効にすると、タグ定義管理とテナンシ／ホームリージョンの参照は行いません。IAM自動作成または通知が有効なら、その機能に必要なホームリージョン参照は残ります。コントローラーのInstance Principalには、対象インスタンスの参照・更新権限に加え、`hpc-cost`名前空間の`use tag-namespaces`権限が必要です。通常のIAM自動作成ではスタックのポリシーを使用します。IAMを外部管理する場合は、以下の権限を追加してください。[OCI APIごとの必要権限](https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-Permissions_Required_for_Each_API_Operation.htm)、[Definedタグの必要権限](https://docs.oracle.com/en-us/iaas/Content/Tagging/Tasks/managingtagsandtagnamespaces.htm)
 
 Instance Principal用のポリシー例（名前とコンパートメントは環境に合わせて置き換えます）:
 
@@ -42,13 +44,15 @@ Allow dynamic-group <controller-dynamic-group> to use tag-namespaces in compartm
 名前空間の名前はテナンシ全体で一意です。同じテナンシに`hpc-cost`が既にある場合、重複作成はできません。既存定義のコンパートメント・用途・管理元を確認し、このスタックへ管理を引き継ぐ場合だけTerraform stateへ取り込みます。以下はTerraform CLIでの例です。`User`が未作成ならキーのimportは不要です。[タグ名前空間のimport](https://docs.oracle.com/en-us/iaas/tools/terraform-provider-oci/latest/docs/r/identity_tag_namespace.html)、[タグキーのimport](https://docs.oracle.com/en-us/iaas/tools/terraform-provider-oci/latest/docs/r/identity_tag.html)
 
 ```bash
-terraform import oci_identity_tag_namespace.hpc_cost 'ocid1.tagnamespace.oc1..example'
-terraform import oci_identity_tag.hpc_cost_user 'tagNamespaces/ocid1.tagnamespace.oc1..example/tags/User'
+terraform import 'oci_identity_tag_namespace.hpc_cost[0]' 'ocid1.tagnamespace.oc1..example'
+terraform import 'oci_identity_tag.hpc_cost_user[0]' 'tagNamespaces/ocid1.tagnamespace.oc1..example/tags/User'
 ```
 
-同じ名前空間・キーを複数スタックのstateへ重複登録しないでください。このスタックで管理する定義はスタックのdestroy対象です。特に既存定義を取り込む場合、キーの削除はテナンシ内でそのタグを使用するリソースにも影響します。[OCIのタグ削除](https://docs.oracle.com/en-us/iaas/Content/Tagging/Tasks/managingtagsandtagnamespaces.htm)
+同じ名前空間・キーを複数スタックのstateへ重複登録しないでください。定義は `prevent_destroy` で保護します。既存定義が state にある状態で `cost_tags_enabled=false` に変える plan と、定義を含むスタックの destroy は停止します。旧アドレスは `moved` ブロックで `[0]` へ引き継ぐため、通常の更新で再 import は不要です。
 
-更新時は、名前空間・キーとIAMを準備してから、コントローラー・予備コントローラー・計算ノードへ修正版の設定とスクリプトを配布します。Gitの更新だけでは稼働環境や生成済みのAutoscaling構成は変わりません。初期スタックの更新とAnsibleの再適用、今後作成するクラスター用のTerraform原本・変数生成元の配布を確認してください。共有領域の既存の状態・履歴は削除しません。
+既存環境でジョブに応じた更新だけを止める場合は、`cost_tags_enabled=true` を維持し、`slurm_user_tags_enabled=false` を指定します。スタックを削除するときは、共有されるタグ定義を別の管理元へ引き継いで state から外すか、利用リソースへの影響を確認したうえで `cost-tags.tf` の削除保護を解除して削除するかを決めてください。キーの削除はテナンシ内でそのタグを使用するリソースにも影響します。[OCIのタグ削除](https://docs.oracle.com/en-us/iaas/Content/Tagging/Tasks/managingtagsandtagnamespaces.htm)
+
+更新時は、名前空間・キーとIAMを準備してから、コントローラー・予備コントローラー・計算ノードへ修正版の設定とスクリプトを配布します。Gitの更新だけでは稼働環境や生成済みのAutoscaling構成は変わりません。初期スタックの更新とAnsibleの再適用、今後作成するクラスター用のTerraform原本・変数生成元の配布を確認してください。既存の Autoscaling クラスターには、初期スタックで生成する変数・inventory の変更が自動反映されません。新しい Terraform 原本を配布する際は、生成済み `variables.tf` の `cost_tags_enabled` と `inventory` の同名設定もそろえてください。従来動作を維持する値は `true` です。共有領域の既存の状態・履歴は削除しません。
 
 既存ノードへの移行では、Terraformのplanに出るInstance Configurationの更新・置換を確認してください。新しい構成を作成してPoolの参照を切り替えた後に旧構成を削除するよう、`create_before_destroy`を設定しています。構成の変更だけではPool内の既存ノードのタグは更新されません。Compute Clusterの計算ノードも、ジョブ中のタグをTerraformが初期値へ戻さないように`hpc-cost.User`の変更を無視するため、既存ノードにキーがない場合はapplyだけでは追加されないことがあります。ワーカーが有効なら、現在のSlurm割当と照合した次の更新でユーザー名または`Management`を付与します。ワーカーが無効な既存ノードには、OCI Consoleなどで名前空間`hpc-cost`、キー`User`へ初期値（通常は`Management`、独自の作成時タグ指定がある場合はその値）を設定してください。新規ノードでは作成時に付与します。
 
@@ -65,6 +69,8 @@ terraform import oci_identity_tag.hpc_cost_user 'tagNamespaces/ocid1.tagnamespac
 設定ファイルは`/etc/slurm/oci-user-tags.json`です。内部の状態と履歴は共有領域に置くため、計算ノードの削除後も残ります。履歴はローテーションする運用ログです。長期の利用実績にはSlurm accountingも使用してください。
 
 ## 検証手順
+
+初回デプロイで `cost_tags_enabled=false` を選んだ構成では、タグ定義と新規ノードの `hpc-cost.User` が作成されず、専用フック・ワーカー・タイマーが配置されないことを確認します。Autoscaling のジョブ起点の作成・アイドル削除が従来どおり動くこと、既存のタグを持つノードからの複製で課金タグが変更されないことも確認します。以下は課金タグを有効にした構成の手順です。
 
 まず少数の計算ノードで確認します。以下はデプロイ先のコントローラーで実行する例です。
 
@@ -134,7 +140,7 @@ done
 - ノードを複数ユーザーが同時に共有すると、単一の`hpc-cost.User`タグでは按分できません。その間は`hpc-cost.User`だけを削除し、Cost Analysisでは値なしとして扱います。利用者が1人になればユーザー名へ、ジョブがなくなれば`Management`へ戻します。同じユーザーの複数ジョブは、そのユーザー名で集計できます。
 - ユーザータグで集計する対象はComputeインスタンスです。ブートボリューム、専用Block Volume、共有ストレージ、コントローラーなどの費用を自動でユーザーへ按分する機能は含みません。
 - 強制削除や障害により、`Management`への復帰より先にインスタンスが終了する場合があります。タグの修正を過去の費用へ遡及適用することはできません。
-- `slurm_user_tags_enabled=false`では専用フックとワーカーを停止します。名前空間・キー、ノード作成時のタグ付与、既存のOCIタグと履歴は保持します。停止後はジョブに応じた更新を行わないため、既存ノードの値は必要に応じて運用側で設定してください。
+- `cost_tags_enabled=true` かつ `slurm_user_tags_enabled=false` では専用フックとワーカーを停止します。名前空間・キー、ノード作成時のタグ付与、既存のOCIタグと履歴は保持します。停止後はジョブに応じた更新を行わないため、既存ノードの値は必要に応じて運用側で設定してください。
 - Cost AnalysisやCost and Usage Reportsへの表示のために、キーの`is_cost_tracking`を有効化する必要はありません。このスタックも明示的には有効化しません。[OCIのコスト追跡タグ](https://docs.oracle.com/en-us/iaas/Content/Tagging/Concepts/taggingoverview.htm)
 - Cost Analysisの表示には最大48時間かかる場合があります。タグは適用前の費用に遡及せず、同じ時間内のタグ切り替えに対する秒・分単位の配賦精度は、この実装だけでは保証できません。[OCI Cost Analysis](https://docs.oracle.com/en-us/iaas/Content/Billing/Concepts/costanalysisoverview.htm)
 

@@ -78,7 +78,7 @@ class ComputeClusterLaunchCostTagTests(unittest.TestCase):
             metadata={"ssh_authorized_keys": "test-key"},
         )
 
-    def launch(self, source_tags, local_scratch=False, source_defined_tags=None):
+    def launch(self, source_tags, local_scratch=False, source_defined_tags=None, cost_tags_enabled=True):
         self.instance.freeform_tags = source_tags
         self.instance.defined_tags = source_defined_tags
         return self.namespace["getLaunchInstanceDetails"](
@@ -92,6 +92,7 @@ class ComputeClusterLaunchCostTagTests(unittest.TestCase):
                 "vpus_per_gb": 10,
                 "mount_point": "/scratch",
             },
+            cost_tags_enabled=cost_tags_enabled,
         )
 
     def test_new_node_does_not_inherit_running_users_cost_tag(self):
@@ -128,6 +129,22 @@ class ComputeClusterLaunchCostTagTests(unittest.TestCase):
                 self.assertEqual(details.freeform_tags["oci_hpc_local_block_volume"],
                                  "true" if local_scratch else "false")
                 self.assertEqual(hasattr(details, "launch_volume_attachments"), local_scratch)
+
+    def test_disabled_cost_tags_preserve_source_tags_without_initialization(self):
+        for local_scratch in (False, True):
+            for defined in (None, {}, {"hpc-cost": {"User": "alice", "Project": "keep"}, "other": {"User": "keep"}}):
+                with self.subTest(local_scratch=local_scratch, defined=defined):
+                    freeform = {"user": "alice", "parent_cluster": "test-cluster", "customer": "keep"}
+                    details = self.launch(freeform, local_scratch=local_scratch,
+                                          source_defined_tags=defined, cost_tags_enabled=False)
+                    self.assertEqual(details.defined_tags, defined or {})
+                    for key, value in freeform.items():
+                        self.assertEqual(details.freeform_tags[key], value)
+                    self.assertEqual(freeform["user"], "alice")
+                    if defined:
+                        self.assertEqual(defined["hpc-cost"]["User"], "alice")
+                    self.assertEqual(details.freeform_tags["oci_hpc_local_block_volume"],
+                                     "true" if local_scratch else "false")
 
     def test_legacy_source_without_tags_still_starts_as_management(self):
         for source_tags in (None, {}, {"parent_cluster": "test-cluster"}):

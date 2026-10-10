@@ -155,12 +155,12 @@ class SlurmUserTagsConfigurationTests(unittest.TestCase):
     def test_flag_reaches_initial_ha_and_autoscaling_inventory(self):
         for filename in ("controller.tf", "slurm_ha.tf"):
             source = (ROOT / filename).read_text()
-            self.assertEqual(source.count("slurm_user_tags_enabled = var.slurm && var.slurm_user_tags_enabled,"), 2)
-            self.assertEqual(source.count("slurm_user_tags_enabled = tostring(var.slurm && var.slurm_user_tags_enabled)"), 2)
+            self.assertEqual(source.count("slurm_user_tags_enabled = var.slurm && var.cost_tags_enabled && var.slurm_user_tags_enabled,"), 2)
+            self.assertEqual(source.count("slurm_user_tags_enabled = tostring(var.slurm && var.cost_tags_enabled && var.slurm_user_tags_enabled)"), 2)
         for filename in ("inventory.tpl", "autoscaling/tf_init/inventory.tpl"):
             self.assertIn("slurm_user_tags_enabled=${slurm_user_tags_enabled}", (ROOT / filename).read_text())
         self.assertIn(
-            "slurm_user_tags_enabled = var.slurm_user_tags_enabled,",
+            "slurm_user_tags_enabled = var.slurm && var.cost_tags_enabled && var.slurm_user_tags_enabled,",
             (ROOT / "autoscaling/tf_init/controller_update.tf").read_text(),
         )
         self.assertIn('variable "slurm_user_tags_enabled"', (ROOT / "conf/variables.tpl").read_text())
@@ -176,22 +176,22 @@ class SlurmUserTagsConfigurationTests(unittest.TestCase):
         self.assertRegex(namespace, r"compartment_id\s*=\s*var.targetCompartment")
         self.assertRegex(namespace, r'name\s*=\s*"hpc-cost"')
         self.assertRegex(tag, r'name\s*=\s*"User"')
-        self.assertRegex(tag, r"tag_namespace_id\s*=\s*oci_identity_tag_namespace.hpc_cost.id")
+        self.assertRegex(tag, r"tag_namespace_id\s*=\s*oci_identity_tag_namespace.hpc_cost\[0\].id")
         for definition in (namespace, tag):
             self.assertRegex(definition, r"provider\s*=\s*oci.home")
             self.assertRegex(definition, r'description\s*=\s*"[A-Za-z][^"\n]+"')
-            # Disabling runtime updates must not destroy tag definitions or
-            # prevent the existing unconditional initial tag from being applied.
-            self.assertNotRegex(definition, r"\b(count|for_each)\s*=")
+            self.assertRegex(definition, r"count\s*=\s*var.cost_tags_enabled \? 1 : 0")
+            self.assertIn("prevent_destroy = true", definition)
+            self.assertNotIn("slurm_user_tags_enabled", definition)
         # No enum restrictions: newly created Slurm users must work immediately.
         self.assertNotRegex(tag, r"\bvalidator\s*\{")
 
     def test_initial_and_dynamic_nodes_use_the_same_defined_tag(self):
         initial = (ROOT / "cost-tags.tf").read_text()
-        self.assertIn('${oci_identity_tag_namespace.hpc_cost.name}.${oci_identity_tag.hpc_cost_user.name}', initial)
-        self.assertRegex(initial, r"user_cost_tags\s*=\s*\{\s*\(local.user_cost_tag_key\)\s*=\s*var.tags\s*\}")
+        self.assertIn('${oci_identity_tag_namespace.hpc_cost[0].name}.${oci_identity_tag.hpc_cost_user[0].name}', initial)
+        self.assertRegex(initial, r"user_cost_tags\s*=\s*var.cost_tags_enabled \? \{\s*\(local.user_cost_tag_key\)\s*=\s*var.tags\s*\}")
         dynamic = (ROOT / "autoscaling/tf_init/cost-tags.tf").read_text()
-        self.assertRegex(dynamic, r'user_cost_tags\s*=\s*\{\s*"hpc-cost.User"\s*=\s*var.tags\s*\}')
+        self.assertRegex(dynamic, r'user_cost_tags\s*=\s*var.cost_tags_enabled \? \{\s*"hpc-cost.User"\s*=\s*var.tags\s*\}')
         self.assertNotIn('resource "oci_identity_', dynamic)
         for base in (ROOT, ROOT / "autoscaling/tf_init"):
             for filename in (
@@ -226,13 +226,38 @@ class SlurmUserTagsConfigurationTests(unittest.TestCase):
             # wait for the tag definition through the local value's reference.
             self.assertEqual(len(re.findall(r"user_cost_tag_key\s*=\s*local.user_cost_tag_key", source)), 2)
 
-    def test_defined_tag_management_always_resolves_the_home_region(self):
+    def test_home_region_discovery_only_for_enabled_features(self):
         data = (ROOT / "data.tf").read_text()
         for kind, name in (("oci_identity_tenancy", "tenancy"), ("oci_identity_regions", "regions")):
             block = data.split('data "{}" "{}" {{'.format(kind, name), 1)[1].split("}", 1)[0]
-            self.assertNotRegex(block, r"\bcount\s*=")
+            self.assertRegex(block, r"count\s*=\s*local.needs_home_region \? 1 : 0")
         local = (ROOT / "locals.tf").read_text()
-        self.assertRegex(local, r"home_region\s*=\s*local.region_map\[data.oci_identity_tenancy.tenancy.home_region_key\]")
+        self.assertIn("local.needs_home_region ? local.region_map[data.oci_identity_tenancy.tenancy[0].home_region_key] : var.region", local)
+        self.assertIn("var.cost_tags_enabled || var.create_iam_policy_dynamic_group || var.slurm_job_notifications_enabled", local)
+
+    def test_cost_flag_reaches_every_launch_and_inventory_path(self):
+        schema = yaml.safe_load((ROOT / "schema.yaml").read_text())
+        self.assertTrue(schema["variables"]["cost_tags_enabled"]["default"])
+        basic = next(group for group in schema["variableGroups"] if group["title"] == "基本設定")
+        self.assertIn("${cost_tags_enabled}", basic["variables"])
+        self.assertNotIn("visible", schema["variables"]["cost_tags_enabled"])
+        self.assertIn("${cost_tags_enabled}", schema["variables"]["slurm_user_tags_enabled"]["visible"]["and"])
+        for filename in ("controller.tf", "slurm_ha.tf"):
+            source = (ROOT / filename).read_text()
+            self.assertEqual(source.count("cost_tags_enabled = var.cost_tags_enabled,"), 2)
+            self.assertEqual(source.count("cost_tags_enabled      = tostring(var.cost_tags_enabled)"), 2)
+        for filename in ("inventory.tpl", "autoscaling/tf_init/inventory.tpl"):
+            self.assertIn("cost_tags_enabled=${cost_tags_enabled}", (ROOT / filename).read_text())
+        self.assertIn('default = ${cost_tags_enabled}', (ROOT / "conf/variables.tpl").read_text())
+        self.assertIn("cost_tags_enabled = var.cost_tags_enabled,", (ROOT / "autoscaling/tf_init/controller_update.tf").read_text())
+        resize = (ROOT / "bin/resize.py").read_text()
+        self.assertIn('current_inventory, "cost_tags_enabled", "true"', resize)
+        definitions = (ROOT / "cost-tags.tf").read_text()
+        for resource in ("oci_identity_tag_namespace.hpc_cost", "oci_identity_tag.hpc_cost_user"):
+            self.assertIn("from = " + resource, definitions)
+            self.assertIn("to   = " + resource + "[0]", definitions)
+        self.assertRegex(definitions, r'user_cost_tags[^\n]+: \{\}')
+        self.assertRegex((ROOT / "autoscaling/tf_init/cost-tags.tf").read_text(), r'user_cost_tags[^\n]+: \{\}')
 
     def test_controller_and_autoscaling_share_the_selected_slurm_state_path(self):
         for filename in ("controller.tf", "slurm_ha.tf"):

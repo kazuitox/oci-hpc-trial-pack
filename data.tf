@@ -15,10 +15,12 @@ data "oci_core_services" "services" {
 }
 
 data "oci_identity_tenancy" "tenancy" {
+  count      = local.needs_home_region ? 1 : 0
   tenancy_id = var.tenancy_ocid
 }
 
 data "oci_identity_regions" "regions" {
+  count = local.needs_home_region ? 1 : 0
 }
 
 data "oci_core_cluster_network_instances" "cluster_network_instances" {

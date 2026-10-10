@@ -173,6 +173,12 @@ variable "ood_vnc_gpu_image_operating_system_version" {
 }
 variable "slurm" { default = true }
 variable "slurm_ha" { default = false }
+variable "cost_tags_enabled" {
+  type        = bool
+  default     = true
+  description = "Create hpc-cost.User definitions and apply compute cost tags; select false for deployments without cost tagging."
+}
+
 variable "slurm_user_tags_enabled" {
   type        = bool
   default     = true
