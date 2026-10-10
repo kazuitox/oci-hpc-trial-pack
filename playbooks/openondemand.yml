@@ -1,0 +1,11 @@
+---
+# Configure only OOD on an already provisioned controller.
+- hosts: controller
+  become: true
+  vars_files:
+    - /opt/oci-hpc/conf/queues.conf
+  tasks:
+    - name: Configure Open OnDemand
+      ansible.builtin.include_role:
+        name: openondemand
+      when: use_ood | default(false) | bool

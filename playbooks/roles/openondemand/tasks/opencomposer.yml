@@ -3,7 +3,7 @@
   ansible.builtin.include_tasks: opencomposer_form.yml
 
 - name: OpenComposer | Install Git
-  ansible.builtin.dnf:
+  ansible.builtin.package:
     name: git
     state: present
 
@@ -12,9 +12,25 @@
     repo: "{{ ood_opencomposer_repository }}"
     dest: "{{ ood_opencomposer_install_dir }}"
     version: "{{ ood_opencomposer_revision }}"
-    update: true
+    update: false
     force: false
   register: ood_opencomposer_checkout
+
+- name: OpenComposer | Read installed source revision
+  ansible.builtin.command: git rev-parse HEAD
+  args:
+    chdir: "{{ ood_opencomposer_install_dir }}"
+  register: ood_opencomposer_installed_revision
+  changed_when: false
+
+- name: OpenComposer | Require the pinned source revision
+  ansible.builtin.assert:
+    that:
+      - ood_opencomposer_installed_revision.stdout == ood_opencomposer_revision
+    fail_msg: >-
+      OpenComposer is not at the pinned revision. Back up local modifications
+      and migrate the checkout before re-running this role.
+  when: not ansible_check_mode
 
 - name: OpenComposer | Configure the Open OnDemand dashboard manifest
   ansible.builtin.template:

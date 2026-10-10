@@ -103,7 +103,6 @@
   loop:
     - activejobs
     - bc_desktop
-    - dashboard/app/apps
     - files
     - myjobs
     - shell
@@ -121,11 +120,22 @@
     - bc_desktop/form.yml
     - bc_desktop/manifest.yml
     - bc_desktop/submit.yml.erb
-    - dashboard/app/apps/ood_app.rb
     - files/manifest.yml
     - myjobs/manifest.yml
     - shell/manifest.yml
     - system-status/manifest.yml
+
+# Keep ERB expressions intact: this file is rendered by OOD for each job.
+- name: OpenOnDemand desktop | Install Ubuntu desktop session launcher
+  ansible.builtin.copy:
+    src: var/www/ood/apps/sys/bc_desktop/template/script.sh.erb
+    dest: /var/www/ood/apps/sys/bc_desktop/template/script.sh.erb
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - ansible_distribution == 'Ubuntu'
+    - ansible_distribution_version == '24.04'
 
 - name: OpenOnDemand dashboard | Ensure Amazon DCV app directories exist
   ansible.builtin.file:

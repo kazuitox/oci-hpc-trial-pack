@@ -53,5 +53,5 @@ ood_opencomposer_revision: 7af3d94b36043d8019b1639cd8e463957eb7a37e
 ood_opencomposer_install_dir: /var/www/ood/apps/sys/OpenComposer
 ood_opencomposer_history_link_dir: /var/www/ood/apps/sys/OpenComposerHistory
 ood_opencomposer_apps_dir: /etc/ood/config/opencomposer/apps
-ood_opencomposer_scheduler_bin: /usr/bin
+ood_opencomposer_scheduler_bin: "{{ slurm_exec | default('/usr') }}/bin"
 ood_opencomposer_copy_environment: false
