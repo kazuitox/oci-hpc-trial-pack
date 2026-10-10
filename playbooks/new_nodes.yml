@@ -181,7 +181,7 @@
         name: latency_check
       when: cluster_network|bool and latency_check|bool
 
-- hosts: all
+- hosts: compute
   become: true
   tasks: 
     - include_role: 
