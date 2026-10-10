@@ -1,101 +1,78 @@
 ---
-- name: check path
+- name: Select local NVMe namespace devices
   set_fact:
-    nvme_path_edited: "{% if nvme_path[-1] == '/' %}{{nvme_path[:-1]}}{% else%}{{nvme_path}}{% endif %}"
+    localdisk_nvmes: "{{ ansible_devices.keys() | select('match', '^nvme[0-9]+n1$') | list }}"
+    localdisk_mount_path: "{{ nvme_path | regex_replace('/+$', '') }}"
+    localdisk_optional_compute: "{{ (role | default('')) == 'compute' and not (initial | default(false) | bool) }}"
 
-- name: Get the number of NVMe's
-  set_fact:
-    nvme_count: "{{ hostvars[inventory_hostname]['ansible_devices'] | select('match','nvme[0-9]|[1-9][0-9]n1') | list | length}}"
+- name: Configure local NVMe scratch
+  block:
+    - name: Inspect and configure local NVMe devices
+      script: "{{ role_path }}/files/localdisk.py"
+      environment:
+        LOCALDISK_DEVICES: "{{ localdisk_nvmes | join(',') }}"
+        LOCALDISK_MOUNT: "{{ localdisk_mount_path }}"
+        LOCALDISK_LOG_VOL: "{{ log_vol | default(false) | bool | ternary('true', 'false') }}"
+        LOCALDISK_REDUNDANCY: "{{ redundancy | default(true) | bool | ternary('true', 'false') }}"
+        LOCALDISK_RAID_NOSYNC: "{{ localdisk_raid_nosync | bool | ternary('true', 'false') }}"
+      register: localdisk_setup
+      changed_when: >-
+        (localdisk_setup.rc | default(1)) == 0 and
+        '"changed": true' in (localdisk_setup.stdout | default(''))
 
-- name: Create a LVM?
-  set_fact:
-    one_lv: "{{( log_vol | bool ) and ( ( nvme_count | int ) > 1 )}}"
+    - name: Read local NVMe mount plan
+      set_fact:
+        localdisk_mounts: "{{ (localdisk_setup.stdout | from_json).mounts }}"
+        localdisk_unused_nvmes: "{{ (localdisk_setup.stdout | from_json).unused }}"
 
-- name: Create a new primary partition
-  parted:
-    device: "/dev/{{item}}"
-    number: 1
-    state: present
-    label: gpt
-  with_items:
-    - "{{ (hostvars[inventory_hostname]['ansible_devices'] | select('match','nvme[1-9][0-9]n1') | list ) + (hostvars[inventory_hostname]['ansible_devices'] | select('match','nvme[0-9]n1') | list) }}"
+    - name: Report unallocated odd NVMe
+      debug:
+        msg: >-
+          localdisk on {{ inventory_hostname }} leaves {{ localdisk_unused_nvmes | join(',') }}
+          unused; this is not a hot spare.
+      when: localdisk_unused_nvmes | length > 0
 
-- name: create a filesystem
-  filesystem:
-    dev: "/dev/{{item}}p1"
-    fstype: xfs
-    opts: "-L locscratch{{item | replace('nvme','') | replace('n1','')}}"
-  with_items:
-    - "{{ (hostvars[inventory_hostname]['ansible_devices'] | select('match','nvme[1-9][0-9]n1') | list ) + (hostvars[inventory_hostname]['ansible_devices'] | select('match','nvme[0-9]n1') | list) }}"
-  when: not ( one_lv | bool )
-
-- name: Mount local volume
-  mount:
-    path: "{% if item | replace('nvme','') | replace('n1','') == '0' %}{{ nvme_path_edited}}{% else%}{{ nvme_path_edited}}{{item | replace('nvme','') | replace('n1','')}}{% endif %}"
-    src: "LABEL=locscratch{{item | replace('nvme','') | replace('n1','')}}"
-    fstype: xfs
-    opts: defaults,noatime
-    state: mounted
-  with_items:
-    - "{{ (hostvars[inventory_hostname]['ansible_devices'] | select('match','nvme[1-9][0-9]n1') | list ) + (hostvars[inventory_hostname]['ansible_devices'] | select('match','nvme[0-9]n1') | list) }}"
-  when: not ( one_lv | bool )
-
-- name: "set permissions on {{ nvme_path_edited }}"
-  become: true
-  file:
-    path: "{% if item | replace('nvme','') | replace('n1','') == '0' %}{{ nvme_path_edited}}{% else%}{{ nvme_path_edited}}{{item | replace('nvme','') | replace('n1','')}}{% endif %}"
-    state: directory
-    owner: "{{ ansible_user }}"
-    mode: 0775
-    group: "{{privilege_group_name}}"
-    recurse: no
-  with_items:
-    - "{{ (hostvars[inventory_hostname]['ansible_devices'] | select('match','nvme[1-9][0-9]n1') | list ) + (hostvars[inventory_hostname]['ansible_devices'] | select('match','nvme[0-9]n1') | list) }}"
-  when: not ( one_lv | bool )
-
-- name: Check for lvm devices
-  shell: fdisk -l|grep vg_nvmes|wc -l
-  register: lv_count
-
-- block:
-    - name: Create volume group
-      lvg:
-        vg: "vg_nvmes"
-        pvs: "{{['/dev/']|product((hostvars[inventory_hostname]['ansible_devices'] | select('match','nvme[1-9][0-9]n1') | list ) + (hostvars[inventory_hostname]['ansible_devices'] | select('match','nvme[0-9]n1') | list) )|map('join', '') | join(',')}}"
-
-    - name: Create Logical volume
-      lvol:
-        vg: "vg_nvmes"
-        lv: "lv_nvmes"
-        size: 100%FREE
-        opts: "{% if redundancy | bool %}--type raid10{% else%}{% if ( nvme_count | int ) > 3 %}-i4{% else%}-i2{% endif %}{% endif %}"
-
-    - name: Create file system
-      filesystem:
-        fstype: xfs
-        dev: "/dev/vg_nvmes/lv_nvmes"
-
-    - name: Mount local volume
+    - name: Mount local NVMe scratch
       mount:
-        path: "{{ nvme_path_edited}}"
-        src: "/dev/vg_nvmes/lv_nvmes"
+        path: "{{ item.path }}"
+        src: "{{ item.src }}"
         fstype: xfs
-        opts: defaults,noatime
+        opts: "{{ item.opts }}"
         state: mounted
+      loop: "{{ localdisk_mounts }}"
+      loop_control:
+        label: "{{ item.src }} -> {{ item.path }}"
 
-    - name: "set permissions on {{ nvme_path_edited }}"
-      become: true
+    - name: Set local NVMe scratch permissions
       file:
-        path: "{{ nvme_path_edited}}"
+        path: "{{ item.path }}"
         state: directory
         owner: "{{ ansible_user }}"
-        mode: 0775
-        group: "{{privilege_group_name}}"
-        recurse: no
-  when:
-    - one_lv | bool 
-    - lv_count.stdout == '0'
+        group: "{{ privilege_group_name }}"
+        mode: '0775'
+        recurse: false
+      loop: "{{ localdisk_mounts }}"
+      loop_control:
+        label: "{{ item.path }}"
 
-- name: rebuild initramfs if ubuntu
-  shell: update-initramfs -k all -u
-  when: ansible_facts['distribution'] == "Ubuntu"
+    - name: Rebuild initramfs on Ubuntu
+      shell: update-initramfs -k all -u
+      when: ansible_facts['distribution'] == "Ubuntu"
+
+  rescue:
+    - name: Warn about optional Autoscaling compute scratch failure
+      debug:
+        msg: >-
+          WARNING: localdisk failed on {{ inventory_hostname }} while
+          {{ ansible_failed_task.name }}; NVMe={{ localdisk_nvmes | join(',') }};
+          {{ ansible_failed_result.stderr | default(ansible_failed_result.msg | default(ansible_failed_result)) }}.
+          Node configuration continues, but scratch is unavailable.
+      when: localdisk_optional_compute | bool
+
+    - name: Fail required local scratch configuration
+      fail:
+        msg: >-
+          localdisk failed on {{ inventory_hostname }} while {{ ansible_failed_task.name }};
+          NVMe={{ localdisk_nvmes | join(',') }};
+          {{ ansible_failed_result.stderr | default(ansible_failed_result.msg | default(ansible_failed_result)) }}
+      when: not (localdisk_optional_compute | bool)
