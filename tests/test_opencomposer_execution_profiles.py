@@ -1,6 +1,10 @@
+import json
 import os
 import re
 import unittest
+
+import jinja2
+import yaml
 
 
 REPOSITORY_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -116,6 +120,33 @@ class OpenComposerExecutionProfileTests(unittest.TestCase):
         self.assertNotIn(tcp_options, rdma_body)
         self.assertIn(tcp_options, vm_body)
         self.assertIn(tcp_options, standard_body)
+
+    def test_intel_mpi_tcp_options_preserve_existing_flags_and_disable_external_collectives(self):
+        environment = jinja2.Environment(undefined=jinja2.StrictUndefined)
+        environment.filters["to_json"] = json.dumps
+        environment.filters["bool"] = bool
+        expected_options = (
+            "-genv I_MPI_FABRICS=shm:ofi -genv I_MPI_OFI_PROVIDER=tcp "
+            "-genv I_MPI_DEBUG=5 -genv I_MPI_COLL_EXTERNAL 0"
+        )
+        for notifications_enabled in (False, True):
+            with self.subTest(notifications_enabled=notifications_enabled):
+                rendered = environment.from_string(self.template).render(
+                    queues=[{
+                        "name": "compute",
+                        "instance_types": [{"name": "hpc", "default": True}],
+                    }],
+                    slurm_job_notifications_enabled=notifications_enabled,
+                )
+                form = yaml.safe_load(rendered)
+                for widget in ("mpi_vm", "mpi_bm_standard"):
+                    options = dict(form["form"][widget]["options"])
+                    self.assertEqual(options["Intel MPI (OneAPI)"], expected_options)
+                    self.assertIn('export MPI_OPTIONS="#{' + widget + '}"', form["script"])
+                for widget in ("mpi_bm_hpc", "mpi_vm", "mpi_bm_standard"):
+                    for label, options in form["form"][widget]["options"]:
+                        if widget == "mpi_bm_hpc" or label != "Intel MPI (OneAPI)":
+                            self.assertNotIn("I_MPI_COLL_EXTERNAL", options)
 
     def test_profile_specific_lines_are_conditionally_generated(self):
         for line in (

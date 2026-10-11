@@ -6,6 +6,8 @@
 
 ### Fixed
 
+- OpenComposer の MPI プロファイルで、`VM (TCP)` と `BM Standard (TCP)` の Intel MPI オプションに `-genv I_MPI_COLL_EXTERNAL 0` を追加しました。既存環境は Open OnDemand role の再適用が必要です。
+
 - OpenComposer History の Start Time・End Time を Submission Time と同じ `YYYY-MM-DD HH:MM:SS` 形式に揃え、日付と時刻の区切りを空白にしました。
 
 ### Changed

@@ -64,7 +64,7 @@ form:
     label: MPI
     value: {{ 'OpenMPI v4.x' | to_json }}
     options:
-      - [{{ 'Intel MPI (OneAPI)' | to_json }}, {{ '-genv I_MPI_FABRICS=shm:ofi -genv I_MPI_OFI_PROVIDER=tcp -genv I_MPI_DEBUG=5' | to_json }}]
+      - [{{ 'Intel MPI (OneAPI)' | to_json }}, {{ '-genv I_MPI_FABRICS=shm:ofi -genv I_MPI_OFI_PROVIDER=tcp -genv I_MPI_DEBUG=5 -genv I_MPI_COLL_EXTERNAL 0' | to_json }}]
       - [{{ 'OpenMPI v4.x' | to_json }}, {{ '--report-bindings --mca btl self,tcp --mca coll_hcoll_enable 0 --bind-to core' | to_json }}]
       - [{{ 'Platform MPI v9.x' | to_json }}, {{ '-intra=shm -TCP -e MPI_FLAGS=y  -d -v -prot' | to_json }}]
     required: true
@@ -75,7 +75,7 @@ form:
     label: MPI
     value: {{ 'OpenMPI v4.x' | to_json }}
     options:
-      - [{{ 'Intel MPI (OneAPI)' | to_json }}, {{ '-genv I_MPI_FABRICS=shm:ofi -genv I_MPI_OFI_PROVIDER=tcp -genv I_MPI_DEBUG=5' | to_json }}]
+      - [{{ 'Intel MPI (OneAPI)' | to_json }}, {{ '-genv I_MPI_FABRICS=shm:ofi -genv I_MPI_OFI_PROVIDER=tcp -genv I_MPI_DEBUG=5 -genv I_MPI_COLL_EXTERNAL 0' | to_json }}]
       - [{{ 'OpenMPI v4.x' | to_json }}, {{ '--report-bindings --mca btl self,tcp --mca coll_hcoll_enable 0 --bind-to core' | to_json }}]
       - [{{ 'Platform MPI v9.x' | to_json }}, {{ '-intra=shm -TCP -e MPI_FLAGS=y  -d -v -prot' | to_json }}]
     required: true
