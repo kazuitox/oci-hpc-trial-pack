@@ -82,19 +82,6 @@
     mode: "0644"
   register: ood_system_status_physical_cores
 
-- name: OpenOnDemand dashboard | Request a Passenger restart after dashboard changes
-  ansible.builtin.file:
-    path: /var/www/ood/apps/sys/dashboard/tmp/restart.txt
-    state: touch
-    owner: root
-    group: root
-    mode: "0644"
-  when: >-
-    ood_dashboard_configuration.changed
-    or ood_opencomposer_frame_widget.changed
-    or ood_opencomposer_endpoint_widgets.changed
-    or ood_system_status_physical_cores.changed
-
 - name: OpenOnDemand dashboard | Ensure system app override directories exist
   ansible.builtin.file:
     path: "/var/www/ood/apps/sys/{{ item }}"
@@ -104,7 +91,9 @@
     - activejobs
     - bc_desktop
     - files
+    - module-browser
     - myjobs
+    - projects
     - shell
     - system-status
 
@@ -121,9 +110,28 @@
     - bc_desktop/manifest.yml
     - bc_desktop/submit.yml.erb
     - files/manifest.yml
+    - module-browser/manifest.yml
     - myjobs/manifest.yml
+    - projects/manifest.yml
     - shell/manifest.yml
     - system-status/manifest.yml
+  register: ood_system_app_overrides
+
+- name: OpenOnDemand dashboard | Request a Passenger restart after dashboard changes
+  ansible.builtin.file:
+    path: /var/www/ood/apps/sys/dashboard/tmp/restart.txt
+    state: touch
+    owner: root
+    group: root
+    mode: "0644"
+  when: >-
+    ood_dashboard_configuration.changed
+    or ood_opencomposer_frame_widget.changed
+    or ood_opencomposer_endpoint_widgets.changed
+    or ood_system_status_physical_cores.changed
+    or ood_system_app_overrides.changed
+    or (ood_opencomposer_dashboard_manifest is defined and ood_opencomposer_dashboard_manifest.changed)
+    or (ood_opencomposer_history_manifest is defined and ood_opencomposer_history_manifest.changed)
 
 # Keep ERB expressions intact: this file is rendered by OOD for each job.
 - name: OpenOnDemand desktop | Install Ubuntu desktop session launcher

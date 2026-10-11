@@ -1,0 +1,10 @@
+---
+name: Project Manager
+# An empty category hides this app from navigation and All Apps in OOD 4.2.5.
+category: ""
+description: |-
+  The Open OnDemand Project Manager
+icon: fa://wrench
+role: projects
+url: projects
+new_window: false

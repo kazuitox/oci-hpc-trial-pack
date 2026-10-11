@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- OpenComposer のメニュー名を「04 OpenComposer」から「03 ジョブ管理」に変更します。「Slurmジョブ」と「History」は同じメニュー内に表示します。
+
+- Open OnDemand の Project Manager と Module Browser をヘッダーメニューと「All Apps」から非表示にします。項目がなくなった親メニューも表示せず、同じ親メニューの他の項目とアプリ本体・既存データは保持します。
+
+- Open OnDemand のジョブ投入・確認メニューを OpenComposer に統一します。標準の「ジョブ投入」と「Active Jobs」をトップ画面、ヘッダーメニュー、「All Apps」の一覧から非表示にし、OpenComposer の「Slurmジョブ」「History」を表示します。標準アプリと既存データは保持し、manifest の変更後もダッシュボードの再起動を要求します。
+
 ## [v1.4.0] - 2026-10-11
 
 ### Security / Fixed
