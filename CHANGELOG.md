@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Autoscaling 作成失敗通知の OCI 情報取得・メール送信を Python 3.6 対応の subprocess 引数に変更しました。Oracle Linux 8 の Controller で `capture_output` の TypeError により原因保存・通知前に停止する不具合を修正しました。Python 3.6 相当の呼び出し制約で、情報取得失敗時の診断保存と送信失敗後の再送を検証します。
+
 ### Added
 
 - Autoscaling の計算ノード作成失敗を、Slurm ジョブ通知から独立した OCI Notifications Topic / EMAIL Subscription で管理者へ通知できるようにしました。Terraform / Ansible と OCI Work Request の診断を後始末前に保存し、送信失敗時は Controller 上で再試行します。初期設定は無効です。

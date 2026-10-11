@@ -36,7 +36,8 @@ def oci_json(config, *args):
     if config["instance_principal"]:
         command += ["--auth", "instance_principal"]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=20, check=True)
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                universal_newlines=True, timeout=20, check=True)
         return json.loads(result.stdout).get("data", [])
     except (OSError, subprocess.SubprocessError, ValueError) as error:
         detail = getattr(error, "stderr", None) or error
@@ -170,7 +171,8 @@ def publish(config, message):
                    "--max-retries", "0", "--connection-timeout", "5", "--read-timeout", "12"]
         if config["instance_principal"]:
             command += ["--auth", "instance_principal"]
-        subprocess.run(command, capture_output=True, text=True, timeout=20, check=True)
+        subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                universal_newlines=True, timeout=20, check=True)
         return True
     except (OSError, subprocess.SubprocessError) as error:
         detail = getattr(error, "stderr", None) or error

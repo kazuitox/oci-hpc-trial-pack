@@ -143,6 +143,8 @@ HPC_OL8
 
 ### 作成失敗の管理者通知
 
+通知プログラムは Controller の Python 3.6 でも使える subprocess 引数で OCI CLI を呼び出します。旧版で `capture_output` の TypeError が出ていた環境は、`bin/autoscaling_failure_notify.py` を Controller の `/opt/oci-hpc/bin/` に更新してください。このエラーで停止した試行は未送信ファイルの保存前に止まるため、プログラム更新だけでは自動再送されません。保存した作成ログから `report` を再実行するか、更新後に失敗試験をやり直して確認します。
+
 スタックの「計算ノードの作成失敗を管理者へ通知」を有効にし、管理者メールアドレスを入力すると、専用の OCI Notifications Topic / EMAIL Subscription と Controller 用の Dynamic Group / publish 権限を作成します。Slurm ジョブ通知の設定とは独立しており、管理者は OCI Notifications から届く Subscription 確認メールを承認する必要があります。IAM の自動作成を使わない環境でも、この通知用リソースをスタックに作成するため、スタック実行者にはホームリージョンでの Dynamic Group / Policy 作成と対象 Compartment での Topic / Subscription 作成権限が必要です。Controller から OCI API へ HTTPS で到達できることも確認してください。
 
 作成が失敗すると、後始末の前に Controller が Terraform / Ansible ログと、該当リソースを特定できた場合の失敗 Work Request の error / log を収集します。メールにはクラスター、キュー、起点 Job ID、失敗箇所、作成ログのパスを記載します。Work Request を特定・取得できない場合は、その旨と Terraform / Ansible のエラーを記載します。`-DEBUG` で後始末を抑止した作成失敗も通知対象です。送信に失敗した通知は `/opt/oci-hpc/logs/autoscaling-failure-notifications/` に保持し、Controller の cron で毎分再試行します。送信失敗はクラスターの後始末を止めません。メール配信が成功したことは、作成失敗の繰り返しが止まったことを意味しません。

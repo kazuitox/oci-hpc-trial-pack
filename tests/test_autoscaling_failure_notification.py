@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -145,6 +147,72 @@ class AutoscalingFailureNotificationTests(unittest.TestCase):
             with mock.patch.object(notify, "oci_json") as lookup:
                 self.assertEqual(notify.main(["report", "--config", str(config)]), 0)
             lookup.assert_not_called()
+
+    def test_oci_lookup_accepts_python36_subprocess_arguments(self):
+        real_run = subprocess.run
+
+        # Explicit Python 3.6-compatible signature rejects capture_output/text.
+        def run36(command, *, stdout=None, stderr=None, universal_newlines=False,
+                  timeout=None, check=False):
+            return real_run(command, stdout=stdout, stderr=stderr,
+                            universal_newlines=universal_newlines,
+                            timeout=timeout, check=check)
+
+        config = {"region": "us-ashburn-1", "instance_principal": False}
+        with mock.patch.object(notify.shutil, "which", return_value=sys.executable), \
+                mock.patch.object(notify.subprocess, "run", side_effect=run36):
+            result = notify.oci_json(
+                config, "-c", 'import json; print(json.dumps({"data": [{"message": "失敗原因"}]}))')
+        self.assertEqual(result, [{"message": "失敗原因"}])
+
+    def test_report_with_lookup_error_preserves_timeout_and_retries_publish_on_python36(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            spool = root / "spool"
+            config_path = root / "config.json"
+            config = {"enabled": True, "topic_id": "ocid1.onstopic.test",
+                      "region": "us-ashburn-1", "instance_principal": True,
+                      "compartment_id": "ocid1.compartment.test", "spool": str(spool)}
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            log = root / "create.log"
+            log.write_text("Error: timeout while waiting for state to become 'RUNNING' "
+                           "(last state: 'PROVISIONING', timeout: 30m0s)\n", encoding="utf-8")
+            sent = []
+
+            def run36(command, *, stdout=None, stderr=None, universal_newlines=False,
+                      timeout=None, check=False):
+                self.assertIs(stdout, subprocess.PIPE)
+                self.assertIs(stderr, subprocess.PIPE)
+                self.assertTrue(universal_newlines)
+                self.assertTrue(check)
+                self.assertEqual(timeout, 20)
+                if command[1:4] != ["ons", "message", "publish"]:
+                    raise subprocess.CalledProcessError(1, command, stderr="lookup denied")
+                path = Path(command[command.index("--from-json") + 1][7:])
+                sent.append(json.loads(path.read_text(encoding="utf-8")))
+                if len(sent) == 1:
+                    raise subprocess.CalledProcessError(1, command, stderr="temporary publish error")
+                return subprocess.CompletedProcess(command, 0, "{}", "")
+
+            with mock.patch.object(notify.subprocess, "run", side_effect=run36):
+                self.assertEqual(notify.main([
+                    "report", "--config", str(config_path), "--cluster", "compute-1-opt",
+                    "--queue", "compute", "--instance-type", "opt", "--nodes", "1",
+                    "--job-id", "123", "--mode", "network", "--started", "1791721740",
+                    "--log", str(log), "--workspace", str(root),
+                ]), 0)
+                messages = list(spool.glob("*.json"))
+                self.assertEqual(len(messages), 1)
+                message = json.loads(messages[0].read_text(encoding="utf-8"))
+                self.assertIn("PROVISIONING", message["body"])
+                self.assertIn("30m0s", message["body"])
+                self.assertIn("失敗 Work Request を特定できませんでした", message["body"])
+                self.assertIn("Job ID: 123", message["body"])
+                self.assertEqual(notify.main(["retry", "--config", str(config_path)]), 0)
+            self.assertEqual(len(sent), 2)
+            self.assertEqual(sent[0], sent[1])
+            self.assertEqual(list(spool.glob("*.json")), [])
+            self.assertEqual(list(spool.glob(".publish-*")), [])
 
     def test_configuration_route_is_separate_from_slurm(self):
         resource = (ROOT / "notifications.tf").read_text(encoding="utf-8")
