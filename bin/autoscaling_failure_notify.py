@@ -125,6 +125,25 @@ def work_request_details(config, workspace, mode, cluster, started):
                  if kind in allowed]
     discovered = created_resources(config, mode, cluster, started)
     resources = list(dict.fromkeys(resources + discovered))
+    if mode == "network":
+        # OCI creates the pool inside the CN. Terraform may only track the CN,
+        # and a timed-out CN can coexist with a FAILED pool work request.
+        linked_pools = []
+        for kind, network_id in resources:
+            if kind != "cluster_network":
+                continue
+            network = oci_json(config, "compute-management", "cluster-network", "get",
+                               "--cluster-network-id", network_id)
+            if not isinstance(network, dict):
+                continue
+            pools = network.get("instance-pools")
+            if not isinstance(pools, list):
+                continue
+            for pool in pools:
+                pool_id = pool.get("id") if isinstance(pool, dict) else None
+                if isinstance(pool_id, str) and pool_id.startswith("ocid1.instancepool."):
+                    linked_pools.append(("instance_pool", pool_id))
+        resources = list(dict.fromkeys(resources + linked_pools))
     details = []
     for kind, resource_id in resources:
         if kind not in allowed:
@@ -147,8 +166,9 @@ def work_request_details(config, workspace, mode, cluster, started):
                             "--work-request-id", request_id, "--all")
             error_text = [item.get("message", "") for item in errors or [] if isinstance(item, dict)]
             log_text = [item.get("message", "") for item in logs or [] if isinstance(item, dict)]
-            details.append("{} / {} / {}\nerror: {}\nlog: {}".format(
+            details.append("{} / {} / {}\nResource: {}\nStatus: {}\nerror: {}\nlog: {}".format(
                 kind, clean(request.get("operation-type", "unknown"), 100), request_id,
+                resource_id, clean(request.get("status", "unknown"), 50),
                 clean("\n".join(error_text), 1800) or "取得できませんでした",
                 clean("\n".join(log_text[-5:]), 1000) or "取得できませんでした"))
     result = "\n\n".join(details) or "該当する失敗 Work Request を特定できませんでした。"

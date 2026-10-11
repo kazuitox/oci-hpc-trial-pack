@@ -124,6 +124,127 @@ class AutoscalingFailureNotificationTests(unittest.TestCase):
             self.assertNotIn("ocid1.workrequest.old", detail)
             self.assertNotIn("ocid1.workrequest.ok", detail)
 
+    def test_network_timeout_email_includes_linked_pool_quota_error(self):
+        # The pool is nested in the CN API response, not an independent TF resource.
+        for state_present in [True, False]:
+            with self.subTest(state_present=state_present), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                network_id = "ocid1.clusternetwork.current"
+                pool_id = "ocid1.instancepool.linked"
+                request_id = "ocid1.workrequest.poolfailure"
+                if state_present:
+                    (root / "terraform.tfstate").write_text(json.dumps({"resources": [{
+                        "name": "cluster_network", "instances": [{"attributes": {"id": network_id}}]
+                    }]}), encoding="utf-8")
+                config = {"enabled": True, "topic_id": "ocid1.onstopic.test",
+                          "compartment_id": "ocid1.compartment.test", "region": "ap-osaka-1",
+                          "instance_principal": True, "spool": str(root / "spool")}
+                config_path = root / "config.json"
+                config_path.write_text(json.dumps(config), encoding="utf-8")
+                log = root / "create.log"
+                log.write_text("Error: timeout while waiting for state to become 'RUNNING' "
+                               "(last state: 'PROVISIONING', timeout: 30m0s)\n", encoding="utf-8")
+                calls = []
+                quota = ("Instance launch failed. (400, QuotaExceeded, false) "
+                         "The following compartment quotas were exceeded: "
+                         "optimized3-core-count in policy 'ocid1.quota.test' by 36.")
+
+                def response(_, *args):
+                    calls.append(args)
+                    if args[:3] == ("compute-management", "cluster-network", "list"):
+                        return [
+                            {"id": "ocid1.clusternetwork.old", "display-name": "compute-1-opt",
+                             "time-created": "2020-01-01T00:00:00Z"},
+                            {"id": network_id, "display-name": "compute-1-opt",
+                             "time-created": "2026-10-11T13:19:02Z"},
+                            {"id": "ocid1.clusternetwork.neighbor", "display-name": "compute-1-opt-lite",
+                             "time-created": "2026-10-11T13:19:02Z"},
+                        ]
+                    if args[:3] == ("compute-management", "cluster-network", "get"):
+                        self.assertIn(network_id, args)
+                        return {"id": network_id, "instance-pools": [
+                            None, {}, {"id": "not-an-ocid"}, {"id": "ocid1.instance.unrelated"},
+                            {"id": pool_id}, {"id": pool_id},
+                        ]}
+                    if args[:3] == ("work-requests", "work-request", "list"):
+                        resource = args[args.index("--resource-id") + 1]
+                        if resource == network_id:
+                            return [{"id": "ocid1.workrequest.network", "status": "IN_PROGRESS",
+                                     "time-accepted": "2026-10-11T13:19:02Z"}]
+                        self.assertEqual(resource, pool_id)
+                        return [
+                            {"id": "ocid1.workrequest.old", "status": "FAILED",
+                             "time-accepted": "2020-01-01T00:00:00Z"},
+                            {"id": "ocid1.workrequest.success", "status": "SUCCEEDED",
+                             "time-accepted": "2026-10-11T13:19:02Z"},
+                            {"id": request_id, "status": "FAILED", "operation-type": "LaunchInstancesInPool",
+                             "time-accepted": "2026-10-11T13:19:02Z"},
+                        ]
+                    self.assertIn(request_id, args)
+                    if args[:3] == ("work-requests", "work-request-error", "list"):
+                        return [{"message": quota}]
+                    if args[:3] == ("work-requests", "work-request-log-entry", "list"):
+                        return [{"message": "Failed to launch instances in the pool"}]
+                    self.fail("Unexpected OCI command: " + repr(args))
+
+                delivered = []
+                with mock.patch.object(notify, "oci_json", side_effect=response), \
+                        mock.patch.object(notify, "publish", side_effect=lambda _, message: delivered.append(message) or True):
+                    self.assertEqual(notify.main([
+                        "report", "--config", str(config_path), "--cluster", "compute-1-opt",
+                        "--queue", "compute", "--instance-type", "opt-default", "--nodes", "2",
+                        "--job-id", "2", "--mode", "network", "--started", "1791724742",
+                        "--log", str(log), "--workspace", str(root),
+                    ]), 0)
+                self.assertEqual(len(delivered), 1)
+                body = delivered[0]["body"]
+                for value in ["PROVISIONING", "LaunchInstancesInPool", "QuotaExceeded",
+                              "optimized3-core-count", "by 36", pool_id, request_id]:
+                    self.assertIn(value, body)
+                self.assertNotIn("ocid1.workrequest.old", body)
+                self.assertNotIn("ocid1.workrequest.success", body)
+                queried = [args[args.index("--resource-id") + 1] for args in calls
+                           if args[:3] == ("work-requests", "work-request", "list")]
+                self.assertEqual(queried.count(pool_id), 1)
+                self.assertEqual(set(queried), {network_id, pool_id})
+
+    def test_network_pool_lookup_failure_retains_parent_work_request_diagnostics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "terraform.tfstate").write_text(json.dumps({"resources": [{
+                "name": "cluster_network", "instances": [{"attributes": {
+                    "id": "ocid1.clusternetwork.current"}}]}]}), encoding="utf-8")
+            config = {"compartment_id": "ocid1.compartment.test"}
+
+            def response(config, *args):
+                if args[:3] == ("compute-management", "cluster-network", "list"):
+                    return []
+                if args[:3] == ("compute-management", "cluster-network", "get"):
+                    config.setdefault("_lookup_errors", []).append("cluster-network get: permission denied")
+                    return None
+                if args[:3] == ("work-requests", "work-request", "list"):
+                    return [{"id": "ocid1.workrequest.parent", "status": "FAILED",
+                             "operation-type": "CreateClusterNetworkReservation",
+                             "time-accepted": "2026-10-11T13:19:02Z"}]
+                if args[:3] == ("work-requests", "work-request-error", "list"):
+                    return [{"message": "Parent reservation failed"}]
+                return []
+
+            with mock.patch.object(notify, "oci_json", side_effect=response):
+                result = notify.work_request_details(config, root, "network", "compute-1-opt", 1791724742)
+            self.assertIn("Parent reservation failed", result)
+            self.assertIn("permission denied", result)
+
+    def test_ambiguous_network_discovery_never_queries_child_pools(self):
+        config = {"compartment_id": "ocid1.compartment.test"}
+        networks = [{"id": "ocid1.clusternetwork." + name, "display-name": "compute-1-opt",
+                     "time-created": "2026-10-11T13:19:02Z"} for name in ["one", "two"]]
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(notify, "oci_json", return_value=networks) as lookup:
+            result = notify.work_request_details(config, Path(directory), "network", "compute-1-opt", 1791724742)
+        self.assertIn("特定できませんでした", result)
+        self.assertEqual(lookup.call_count, 1)
+
     def test_compute_cluster_instance_failure_is_queried_by_instance_id(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
