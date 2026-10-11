@@ -1,0 +1,130 @@
+---
+- name: Require whole-disk PVs or unused unpartitioned disks for LVM
+  assert:
+    that:
+      - localdisk_devices | map(attribute='layout') | difference(['raw_pv', 'individual']) | length == 0
+      - localdisk_devices | selectattr('partition_exists') | list | length == 0
+      - localdisk_devices | selectattr('partition_table') | list | length == 0
+    fail_msg: "LVM scratch needs unpartitioned disks. Existing partitions are left intact; no automatic wipe is performed."
+
+- name: Inspect the combined scratch mount point
+  command:
+    argv:
+      - findmnt
+      - --noheadings
+      - --output
+      - SOURCE
+      - --mountpoint
+      - "{{ nvme_path_edited }}"
+  register: localdisk_existing_mount
+  changed_when: false
+  failed_when: localdisk_existing_mount.rc not in [0, 1]
+  check_mode: false
+
+- name: Reject a combined scratch mount point occupied by another filesystem
+  assert:
+    that:
+      - localdisk_existing_mount.rc == 1 or (localdisk_existing_mount.stdout | trim) in ['/dev/vg_nvmes/lv_nvmes', '/dev/mapper/vg_nvmes-lv_nvmes']
+    fail_msg: "{{ nvme_path_edited }} is mounted from {{ localdisk_existing_mount.stdout }}; leaving the existing mount intact."
+
+- name: Read existing logical volumes
+  command: lvs --reportformat json --options vg_name,lv_name
+  register: localdisk_lvs
+  changed_when: false
+  check_mode: false
+
+- name: Validate ownership of the scratch volume group
+  assert:
+    that:
+      - >-
+        (localdisk_pvs.stdout | from_json).report[0].pv
+        | selectattr('vg_name', 'equalto', 'vg_nvmes') | map(attribute='pv_name') | list
+        | difference(localdisk_devices | map(attribute='path') | list) | length == 0
+      - >-
+        (localdisk_lvs.stdout | from_json).report[0].lv
+        | selectattr('vg_name', 'equalto', 'vg_nvmes') | map(attribute='lv_name') | list
+        | difference(['lv_nvmes']) | length == 0
+    fail_msg: "vg_nvmes contains other devices or logical volumes; refusing to alter its membership."
+
+- name: Check whether the scratch LV already exists
+  set_fact:
+    localdisk_lv_exists: >-
+      {{ (localdisk_lvs.stdout | from_json).report[0].lv
+         | selectattr('vg_name', 'equalto', 'vg_nvmes')
+         | selectattr('lv_name', 'equalto', 'lv_nvmes') | list | length > 0 }}
+
+- name: Create or complete the scratch volume group
+  community.general.lvg:
+    vg: vg_nvmes
+    pvs: "{{ localdisk_devices | map(attribute='path') | list }}"
+
+- name: Plan and create a new scratch LV
+  when:
+    - not (localdisk_lv_exists | bool)
+    - not ansible_check_mode
+  block:
+    - name: Read free extents on each scratch physical volume
+      command: pvs --reportformat json --options pv_name,vg_name,pv_pe_count,pv_pe_alloc_count
+      register: localdisk_free_pvs
+      changed_when: false
+
+    - name: Read the scratch volume group extent size
+      command: vgs --reportformat json --units b --nosuffix --options vg_extent_size vg_nvmes
+      register: localdisk_vgs
+      changed_when: false
+
+    - name: Calculate a disk-count-aware layout and usable capacity
+      set_fact:
+        localdisk_lvm_plan: >-
+          {{ localdisk_devices | map(attribute='path') | list | localdisk_plan_lvm(
+               (localdisk_free_pvs.stdout | from_json).report[0].pv,
+               (localdisk_vgs.stdout | from_json).report[0].vg[0].vg_extent_size,
+               redundancy | default(false) | bool,
+               localdisk_raid_reserve_mib | int,
+               localdisk_raid_nosync | bool) }}
+
+    - name: Report the scratch LVM layout
+      debug:
+        var: localdisk_lvm_plan
+
+    - name: Create the scratch LV without resizing existing volumes
+      community.general.lvol:
+        vg: vg_nvmes
+        lv: lv_nvmes
+        size: "{{ localdisk_lvm_plan.size_kib }}k"
+        opts: "{{ localdisk_lvm_plan.opts }}"
+        pvs: "{{ localdisk_lvm_plan.pvs | join(',') }}"
+        shrink: false
+
+- name: Activate an existing scratch LV without changing its size or RAID type
+  community.general.lvol:
+    vg: vg_nvmes
+    lv: lv_nvmes
+    active: true
+    shrink: false
+  when: localdisk_lv_exists | bool
+
+- name: Create the combined scratch filesystem
+  community.general.filesystem:
+    dev: /dev/vg_nvmes/lv_nvmes
+    fstype: xfs
+    force: false
+  when: not ansible_check_mode or (localdisk_lv_exists | bool)
+
+- name: Mount the combined scratch filesystem
+  ansible.posix.mount:
+    path: "{{ nvme_path_edited }}"
+    src: /dev/vg_nvmes/lv_nvmes
+    fstype: xfs
+    opts: "{{ 'defaults,noatime,nofail' if localdisk_ignore_errors | bool else 'defaults,noatime' }}"
+    state: mounted
+  when: not ansible_check_mode
+
+- name: Set combined scratch permissions
+  file:
+    path: "{{ nvme_path_edited }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ privilege_group_name }}"
+    mode: '0775'
+  when: not ansible_check_mode

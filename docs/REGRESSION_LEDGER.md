@@ -29,6 +29,7 @@
 | REG-023 | `resize.sh` は実効ユーザーが `ubuntu` / `opc` の場合に `USER` 環境変数に依存せず処理を続け、root・許可外・ユーザー特定失敗時は非ゼロで副作用のある処理前に停止する。監視再同期の失敗は `configure_as.sh` に伝わり、再試行段階を保持する。 | [test_resize_user_check.py](../tests/test_resize_user_check.py)：実 Shell とコマンドスタブで `USER` の各値、許可・拒否、後続処理の到達、監視再同期の呼び出し結果を確認。実 OS アカウントと OCI は使用しない。 |
 | REG-024 | OOD は 4.2.5 / Dex 2.45.1 を導入し、旧標準 Ruby ファイルで上書きしない。OIDC 秘密値を安全に生成・永続化し、再実行・同時実行で値を保持する。破損時は停止する。更新完了まで PUN の更新を再試行する。 | [test_openondemand_upgrade.py](../tests/test_openondemand_upgrade.py)：秘密値生成・永続化・権限・並行処理・破損／symlink 拒否、認証別テンプレート生成、パッケージ指定・完了処理の静的検査、実 Ansible と DNF スタブによる Node.js 未有効／旧版／無効から22への切替・22の保持・取得障害時の停止、Ansible の実タスクによる秘密値保持とログ非露出（未導入時はスキップ）。パッケージ更新やブラウザー操作は含まない。 |
 | REG-025 | Ubuntu 24.04 の bc_desktop は Xfce の初期設定を含むスクリプト全体を専用 D-Bus 内で実行し、SESSION_MANAGER を継承しない。SAFE_PATH・他のデスクトップの source 方式を保持し、終了コードを返す。依存不足は127で停止する。Ubuntu VNC ノードのみ依存パッケージを導入し、OL8 は変更しない。 | [test_bc_desktop_session.py](../tests/test_bc_desktop_session.py)：Ruby ERB レンダリングと bash -n、D-Bus スタブと実 Bash による初期設定の分離・SAFE_PATH・終了コード0/1/42/143・SIGTERM・source・依存不足、配布条件と初期／動的ノードの role 呼び出しの静的検査。実 D-Bus・Xfce・Slurm は使用しない。 |
+| REG-026 | 内蔵 NVMe を安全に選別し、2台の冗長 LVM は RAID1、4台以上の偶数台は RAID10 とする。既存 LV は再利用しサイズ・形式を変更しない。XFS 作成とマウントは Ansible モジュールで行う。Autoscaling compute の失敗は記録して続行し、その他のホストは失敗させる。 | [選別・容量計算](../playbooks/roles/localdisk/tests/test_layout.py)、[実ツールによる署名検査](../playbooks/roles/localdisk/tests/test_probe_tools.py)、[タスクとLVMモジュール](../playbooks/roles/localdisk/tests/test_task_contract.py)。実 NVMe と OCI は使用しない。blkid / parted 不在時は実ツール検査をスキップする。 |
 
 ## 自動検証が未整備の振る舞い
 
@@ -63,6 +64,7 @@
 | REG-020 | 修正した `versions.tf` と `schema.yaml` が直下にあるフォルダ（または ZIP）から新規スタック作成画面を開く。Terraform バージョンが 1.5.x と認識され、`Invalid Terraform version: .` が表示されず変数設定へ進めることを確認する。作業ディレクトリを `autoscaling/tf_init/` にしない。ルート構成の Plan、コントローラの Terraform 1.5.0 以上での動的構成実行も対象に応じて確認する。 |
 | REG-021 | [Slurm の初期起動と再構成の待機](../README.md#slurm-の初期起動と再構成の待機)に従い、Ubuntu 24.04 / Oracle Linux 8 の新規 Resource Manager デプロイと通常の configure.sh 再実行を確認する。TRES → 起動 → 対象 controller の UP → reconfigure の順、同じ設定が残る再実行、HA backup の待機、Slurm 無効、通常版・軽量版の共有ハンドラを確認する。課金タグを無効にした初回デプロイで、reset-failed の未読み込み応答後もサービス起動・ping・reconfigure へ進むことを確認する。隔離した検証環境で DBD / controller の遅延成功と期限切れを確認し、失敗時に後続へ進まないこと、topology・状態ファイル・既存キューの保持も確認する。 |
 | REG-023 | Ubuntu と Oracle Linux 8 の各コントローラで `ubuntu` / `opc` として新規 Autoscaling クラスターを作成し、Ansible 後の監視再同期がユーザー判定エラーなく完了することを確認する。`USER` を外した手動の監視再同期も確認する。許可外ユーザーでの手動実行は処理が進まず非ゼロとなり、失敗時は `.initial-configure-stage` の `monitoring` 段階が残ることを確認する。 |
+| REG-026 | `localdisk=true`、`log_vol=true`、`redundancy=true` の新規2 NVMeノードで RAID1・XFS・`/mnt/localdisk` のマウントを確認する。LV作成後に停止した既存ノードの再実行、個別ディスク、NVMeなし、無効設定、通常版・軽量版、失敗時の記録と続行範囲を確認する。既存 LV の形式・容量が保持されること、未知の署名・別VG・使用中ディスクが初期化されないことも確認する。 |
 
 REG-022 の実環境確認は[調査・更新手順](autoscaling-topology-identity.md#ローカル検証と実環境確認を分ける)を参照する。標準版・軽量版、ラック対応、到達不能ノード回収、HA 同期で対象の一覧だけが更新されることを確認する。
 

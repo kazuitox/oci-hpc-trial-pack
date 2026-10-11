@@ -1,2 +1,13 @@
-nvme_path: "/scratch"
+---
+nvme_path: /scratch
+
+# Only optional scratch on autoscaling compute nodes may fail without failing
+# the play. Controller, NFS and ordinary static-node builds remain strict.
+localdisk_ignore_errors: "{{ (autoscaling | default(false) | bool) and ('compute' in group_names) }}"
+
+# Leave room for RAID metadata on each PV. Existing LVs are never resized.
+localdisk_raid_reserve_mib: 16
+
+# Only new, disposable scratch RAID LVs skip initial image synchronization.
+# This never stops synchronization or changes options on an existing LV.
 localdisk_raid_nosync: true

@@ -1,78 +1,125 @@
 ---
-- name: Select local NVMe namespace devices
+- name: Normalize the local scratch path
   set_fact:
-    localdisk_nvmes: "{{ ansible_devices.keys() | select('match', '^nvme[0-9]+n1$') | list }}"
-    localdisk_mount_path: "{{ nvme_path | regex_replace('/+$', '') }}"
-    localdisk_optional_compute: "{{ (role | default('')) == 'compute' and not (initial | default(false) | bool) }}"
+    nvme_path_edited: "{{ nvme_path | regex_replace('/+$', '') }}"
 
-- name: Configure local NVMe scratch
+- name: Validate the local scratch path
+  assert:
+    that:
+      - nvme_path_edited is match('^/[^/].*')
+      - "'..' not in nvme_path_edited.split('/')"
+      - "'.' not in nvme_path_edited.split('/')"
+      - "'//' not in nvme_path_edited"
+    fail_msg: "nvme_path must be an absolute directory path other than /."
+
+- name: Refresh device facts before selecting NVMe devices
+  setup:
+    gather_subset:
+      - '!all'
+      - '!min'
+      - devices
+    filter: ansible_devices
+
+- name: Find NVMe namespaces
+  set_fact:
+    localdisk_candidates: "{{ ansible_devices.keys() | select('match', '^nvme[0-9]+n[1-9][0-9]*$') | list | sort }}"
+    localdisk_devices: []
+
+- name: Configure available NVMe scratch devices
+  when: localdisk_candidates | length > 0
   block:
-    - name: Inspect and configure local NVMe devices
-      script: "{{ role_path }}/files/localdisk.py"
-      environment:
-        LOCALDISK_DEVICES: "{{ localdisk_nvmes | join(',') }}"
-        LOCALDISK_MOUNT: "{{ localdisk_mount_path }}"
-        LOCALDISK_LOG_VOL: "{{ log_vol | default(false) | bool | ternary('true', 'false') }}"
-        LOCALDISK_REDUNDANCY: "{{ redundancy | default(true) | bool | ternary('true', 'false') }}"
-        LOCALDISK_RAID_NOSYNC: "{{ localdisk_raid_nosync | bool | ternary('true', 'false') }}"
-      register: localdisk_setup
-      changed_when: >-
-        (localdisk_setup.rc | default(1)) == 0 and
-        '"changed": true' in (localdisk_setup.stdout | default(''))
+    - name: Inspect NVMe devices without changing them
+      command:
+        argv:
+          - lsblk
+          - --json
+          - --list
+          - --paths
+          - --bytes
+          - --output
+          - NAME,TYPE,FSTYPE,LABEL,MOUNTPOINT,SIZE,RO,MAJ:MIN
+          - "/dev/{{ item }}"
+      loop: "{{ localdisk_candidates }}"
+      register: localdisk_lsblk
+      changed_when: false
+      check_mode: false
 
-    - name: Read local NVMe mount plan
+    # util-linux 2.32.1 has no lsblk PTTYPE column. Probe each whole disk
+    # separately so a signature-free disk (rc=2) is not confused with errors
+    # from a different disk in the same invocation.
+    - name: Probe NVMe signatures and partition tables without changing them
+      command:
+        argv:
+          - blkid
+          - -p
+          - -o
+          - export
+          - "/dev/{{ item }}"
+      loop: "{{ localdisk_candidates }}"
+      register: localdisk_blkid
+      changed_when: false
+      failed_when: >-
+        localdisk_blkid.rc not in [0, 2]
+        or (localdisk_blkid.stderr | trim | length > 0)
+        or (localdisk_blkid.rc == 2 and localdisk_blkid.stdout | trim | length > 0)
+      check_mode: false
+
+    - name: Read all active mount points including bind mounts
+      command: findmnt --json --list --output MAJ:MIN,TARGET
+      register: localdisk_findmnt
+      changed_when: false
+      check_mode: false
+
+    - name: Read physical volume ownership
+      command: pvs --reportformat json --options pv_name,vg_name
+      register: localdisk_pvs
+      changed_when: false
+      check_mode: false
+
+    - name: Select local scratch devices
       set_fact:
-        localdisk_mounts: "{{ (localdisk_setup.stdout | from_json).mounts }}"
-        localdisk_unused_nvmes: "{{ (localdisk_setup.stdout | from_json).unused }}"
+        localdisk_selection: >-
+          {{ localdisk_lsblk.results | localdisk_merge_probes(localdisk_blkid.results)
+             | localdisk_select(
+               (localdisk_pvs.stdout | from_json).report[0].pv,
+               (localdisk_findmnt.stdout | from_json).filesystems,
+               nvme_path_edited) }}
 
-    - name: Report unallocated odd NVMe
+    - name: Report devices excluded from scratch setup
       debug:
-        msg: >-
-          localdisk on {{ inventory_hostname }} leaves {{ localdisk_unused_nvmes | join(',') }}
-          unused; this is not a hot spare.
-      when: localdisk_unused_nvmes | length > 0
+        msg: "WARNING: Excluding {{ item.device }} from local scratch: {{ item.reason }}"
+      loop: "{{ localdisk_selection.excluded }}"
 
-    - name: Mount local NVMe scratch
-      mount:
-        path: "{{ item.path }}"
-        src: "{{ item.src }}"
-        fstype: xfs
-        opts: "{{ item.opts }}"
-        state: mounted
-      loop: "{{ localdisk_mounts }}"
+    - name: Use the same device list for counting and provisioning
+      set_fact:
+        localdisk_devices: "{{ localdisk_selection.devices }}"
+        nvme_count: "{{ localdisk_selection.devices | length }}"
+        one_lv: "{{ (log_vol | default(false) | bool) and (localdisk_selection.devices | length > 1) }}"
+
+    - name: Configure one combined local scratch volume
+      include_tasks: lvm.yml
+      when: one_lv | bool
+
+    - name: Configure individual local scratch volumes
+      include_tasks: individual.yml
+      loop: "{{ localdisk_devices }}"
       loop_control:
-        label: "{{ item.src }} -> {{ item.path }}"
+        loop_var: localdisk_device
+        label: "{{ localdisk_device.path }}"
+      when: not (one_lv | bool)
 
-    - name: Set local NVMe scratch permissions
-      file:
-        path: "{{ item.path }}"
-        state: directory
-        owner: "{{ ansible_user }}"
-        group: "{{ privilege_group_name }}"
-        mode: '0775'
-        recurse: false
-      loop: "{{ localdisk_mounts }}"
-      loop_control:
-        label: "{{ item.path }}"
+    - name: Rebuild initramfs after successful Ubuntu scratch setup
+      command: update-initramfs -k all -u
+      when:
+        - ansible_facts.distribution == 'Ubuntu'
+        - localdisk_devices | length > 0
 
-    - name: Rebuild initramfs on Ubuntu
-      shell: update-initramfs -k all -u
-      when: ansible_facts['distribution'] == "Ubuntu"
+    - name: Record the completed local scratch setup
+      set_fact:
+        localdisk_ready: "{{ not ansible_check_mode }}"
+        localdisk_status: "{{ 'planned' if ansible_check_mode else 'ready' }}"
+      when: localdisk_devices | length > 0
 
-  rescue:
-    - name: Warn about optional Autoscaling compute scratch failure
-      debug:
-        msg: >-
-          WARNING: localdisk failed on {{ inventory_hostname }} while
-          {{ ansible_failed_task.name }}; NVMe={{ localdisk_nvmes | join(',') }};
-          {{ ansible_failed_result.stderr | default(ansible_failed_result.msg | default(ansible_failed_result)) }}.
-          Node configuration continues, but scratch is unavailable.
-      when: localdisk_optional_compute | bool
-
-    - name: Fail required local scratch configuration
-      fail:
-        msg: >-
-          localdisk failed on {{ inventory_hostname }} while {{ ansible_failed_task.name }};
-          NVMe={{ localdisk_nvmes | join(',') }};
-          {{ ansible_failed_result.stderr | default(ansible_failed_result.msg | default(ansible_failed_result)) }}
-      when: not (localdisk_optional_compute | bool)
+- name: Report local scratch availability
+  debug:
+    msg: "Local scratch status={{ localdisk_status }}; devices={{ localdisk_devices | map(attribute='path') | list }}"

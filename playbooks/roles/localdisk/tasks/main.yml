@@ -1,1 +1,32 @@
-- include_tasks: common.yml
+---
+- name: Initialize local scratch status
+  set_fact:
+    localdisk_ready: false
+    localdisk_status: unavailable
+    localdisk_devices: []
+
+- name: Configure local scratch
+  block:
+    - include_tasks: common.yml
+  rescue:
+    - name: Record the local scratch failure
+      set_fact:
+        localdisk_ready: false
+        localdisk_status: failed
+        localdisk_failure:
+          task: "{{ ansible_failed_task.name | default('localdisk') }}"
+          devices: "{{ localdisk_devices if localdisk_devices | length > 0 else localdisk_candidates | default([]) | map('regex_replace', '^', '/dev/') | list }}"
+          message: "{{ ansible_failed_result.msg | default('') }}"
+          stderr: "{{ ansible_failed_result.stderr | default(ansible_failed_result.err | default('')) }}"
+          device_errors: "{{ ansible_failed_result.results | default([]) | selectattr('failed', 'defined') | selectattr('failed') | list }}"
+
+    - name: Report the local scratch failure
+      debug:
+        msg:
+          - "WARNING: Local scratch setup failed: {{ localdisk_failure | to_json }}"
+          - "{{ 'Continuing node setup without guaranteed local scratch; writes may fail or use the boot volume.' if localdisk_ignore_errors | bool else 'Local scratch is required on this host.' }}"
+
+    - name: Fail hosts that require local scratch
+      fail:
+        msg: "Local scratch setup failed: {{ localdisk_failure | to_json }}"
+      when: not (localdisk_ignore_errors | bool)

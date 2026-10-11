@@ -1,0 +1,63 @@
+---
+- name: Require an unused disk or the existing scratch partition
+  assert:
+    that:
+      - localdisk_device.layout == 'individual'
+    fail_msg: "{{ localdisk_device.path }} has an incompatible layout: {{ localdisk_device.layout }}. No disk signatures or partitions were removed."
+
+- name: Create a scratch partition only when it does not exist
+  community.general.parted:
+    device: "{{ localdisk_device.path }}"
+    number: 1
+    state: present
+    label: gpt
+    name: localscratch
+    part_start: 1MiB
+    part_end: 100%
+  when: not localdisk_device.partition_exists
+
+- name: Wait for the scratch partition device
+  wait_for:
+    path: "{{ localdisk_device.path }}p1"
+    timeout: 30
+  when: not ansible_check_mode
+
+- name: Create the individual scratch filesystem
+  community.general.filesystem:
+    dev: "{{ localdisk_device.path }}p1"
+    fstype: xfs
+    force: false
+    opts: "-L {{ localdisk_device.label }}"
+  when: not ansible_check_mode or localdisk_device.partition_exists
+
+- name: Read the individual scratch filesystem UUID
+  command:
+    argv:
+      - blkid
+      - -s
+      - UUID
+      - -o
+      - value
+      - "{{ localdisk_device.path }}p1"
+  register: localdisk_uuid
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Mount the individual scratch filesystem
+  ansible.posix.mount:
+    path: "{{ localdisk_device.mount }}"
+    src: "UUID={{ localdisk_uuid.stdout | trim }}"
+    fstype: xfs
+    opts: "{{ 'defaults,noatime,nofail' if localdisk_ignore_errors | bool else 'defaults,noatime' }}"
+    state: mounted
+  when: not ansible_check_mode
+
+- name: Set individual scratch permissions
+  file:
+    path: "{{ localdisk_device.mount }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ privilege_group_name }}"
+    mode: '0775'
+  when: not ansible_check_mode

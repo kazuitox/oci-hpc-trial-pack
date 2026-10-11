@@ -487,6 +487,14 @@ Destroy 開始後は `cluster user add` など、通知リソースを新しく�
 
 既存 FSS を使う場合、マウントポイントに `/home` を直接指定しないでください。スタックは `$nfs_source_path/home` を作成し、必要なファイルをコピーしたうえで `/home` にマウントします。
 
+## ローカル NVMe のスクラッチ
+
+内蔵 NVMe は `localdisk=true` で構成します。2台を LVM RAID1 にまとめる場合は `log_vol=true`、`redundancy=true` を指定します。`log_vol` の既定値は `false` なので、RAID1 を利用する場合は明示的に変更してください。初期ノード・Autoscaling ノードのマウント先は `/mnt/localdisk`、VG は `vg_nvmes`、LV は `lv_nvmes`、ファイルシステムは XFS です。`use_local_block_volume` は別機能であり、内蔵 NVMe の利用には不要です。
+
+localdisk ロールは Ansible の LVM・filesystem・mount モジュールで構成します。既存 LV のサイズ・RAID 形式は変更せず、XFS が未作成なら作成してマウントします。設定変更による既存の個別ディスク構成から LVM への自動変換は行いません。Autoscaling の計算ノードでは失敗を記録してノード構築を続けるため、構築完了後に `findmnt /mnt/localdisk` と `sudo lvs -a -o lv_name,vg_name,segtype,devices vg_nvmes` を確認してください。
+
+既存環境に適用する際は、`tasks/`・`defaults/`・`filter_plugins/` を含む [localdisk ロール](playbooks/roles/localdisk/README.md) 全体をコントローラへ配布してください。新規ノードには新しいロールが使われます。既存ノードへの反映には対象を限定したロールの再実行が必要です。`community.general` と `ansible.posix` が必要ですが、通常のコントローラ構築処理で導入しています。
+
 ## 追加ストレージ
 
 `use_cluster_nfs` を有効にすると、コントローラから `cluster_nfs_path` を NFS 共有します。デフォルトは `/nfs/cluster` です。
