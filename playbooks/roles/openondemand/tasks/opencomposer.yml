@@ -94,6 +94,19 @@
     mode: "0644"
   register: ood_opencomposer_manifest
 
+- name: OpenComposer | Install the managed History view and refresh script
+  ansible.builtin.copy:
+    src: "opencomposer/{{ item.src }}"
+    dest: "{{ ood_opencomposer_install_dir }}/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - { src: history.erb, dest: views/history.erb }
+    - { src: history-refresh.js, dest: public/history-refresh.js }
+    - { src: LICENSE, dest: LICENSE }
+  register: ood_opencomposer_history_ui
+
 - name: OpenComposer | Verify the app in the Open OnDemand Ruby environment
   ansible.builtin.command:
     argv:
@@ -162,6 +175,7 @@
     or ood_opencomposer_dashboard_manifest.changed
     or ood_opencomposer_history_manifest.changed
     or ood_opencomposer_permissions.changed
+    or ood_opencomposer_history_ui.changed
     or ood_opencomposer_config.changed
     or ood_opencomposer_manifest.changed
     or ood_opencomposer_form.changed
