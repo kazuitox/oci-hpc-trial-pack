@@ -50,7 +50,7 @@ resource "null_resource" "autoscaling_failure_notification_deploy" {
   }
 
   provisioner "file" {
-    content     = "PATH=/usr/local/bin:/usr/bin:/bin\n* * * * * ${local.controller_username} /usr/bin/python3 /opt/oci-hpc/bin/autoscaling_failure_notify.py retry >> /opt/oci-hpc/logs/autoscaling_failure_notify.log 2>&1\n"
+    content     = "PATH=/home/${local.controller_username}/.local/bin:/home/${local.controller_username}/bin:/usr/local/bin:/usr/bin:/bin\n* * * * * ${local.controller_username} /usr/bin/python3 /opt/oci-hpc/bin/autoscaling_failure_notify.py retry >> /opt/oci-hpc/logs/autoscaling_failure_notify.log 2>&1\n"
     destination = "/tmp/oci-hpc-autoscaling-failure-notify.cron"
     connection {
       host        = local.host

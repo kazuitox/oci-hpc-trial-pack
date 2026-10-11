@@ -6,6 +6,8 @@
 
 ### Fixed
 
+- Autoscaling 作成失敗通知は PATH に OCI CLI がない場合も Controller ユーザーの `.local/bin`・`bin` と `/usr/local/bin`・`/usr/bin` を探索します。再送 cron の PATH にユーザーの配置先を追加し、情報取得失敗の理由をメールにも記載します。Terraform の接頭辞を除いて Ansible の失敗タスク名と複数行の理由を抽出し、末尾の重複表示を避けます。
+
 - Autoscaling 作成失敗通知の OCI 情報取得・メール送信を Python 3.6 対応の subprocess 引数に変更しました。Oracle Linux 8 の Controller で `capture_output` の TypeError により原因保存・通知前に停止する不具合を修正しました。Python 3.6 相当の呼び出し制約で、情報取得失敗時の診断保存と送信失敗後の再送を検証します。
 
 ### Added

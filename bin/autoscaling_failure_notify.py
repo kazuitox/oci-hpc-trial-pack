@@ -30,8 +30,21 @@ def clean(value, limit=1200):
     return "\n".join(lines)[:limit]
 
 
+def oci_executable():
+    executable = shutil.which("oci")
+    if executable:
+        return executable
+    # Cron and interactive shells may expose different PATH values.
+    candidates = [Path.home() / ".local/bin/oci", Path.home() / "bin/oci",
+                  Path("/usr/local/bin/oci"), Path("/usr/bin/oci")]
+    for candidate in candidates:
+        if candidate.is_file() and os.access(str(candidate), os.X_OK):
+            return str(candidate)
+    return "oci"  # Let the existing error handling report a missing installation.
+
+
 def oci_json(config, *args):
-    command = [shutil.which("oci") or "oci", *args, "--region", config["region"],
+    command = [oci_executable(), *args, "--region", config["region"],
                "--max-retries", "0", "--connection-timeout", "5", "--read-timeout", "12"]
     if config["instance_principal"]:
         command += ["--auth", "instance_principal"]
@@ -41,7 +54,9 @@ def oci_json(config, *args):
         return json.loads(result.stdout).get("data", [])
     except (OSError, subprocess.SubprocessError, ValueError) as error:
         detail = getattr(error, "stderr", None) or error
-        print("OCI lookup failed: {}: {}".format(args[:3], clean(detail, 300)), file=sys.stderr)
+        diagnostic = "{}: {}".format(args[:3], clean(detail, 300))
+        config.setdefault("_lookup_errors", []).append(diagnostic)
+        print("OCI lookup failed: " + diagnostic, file=sys.stderr)
         return None
 
 
@@ -99,6 +114,8 @@ def parse_time(value):
 
 
 def work_request_details(config, workspace, mode, cluster, started):
+    config = dict(config)
+    config["_lookup_errors"] = []
     allowed = {
         "pool": {"instance_pool"},
         "network": {"cluster_network", "instance_pool"},
@@ -134,7 +151,10 @@ def work_request_details(config, workspace, mode, cluster, started):
                 kind, clean(request.get("operation-type", "unknown"), 100), request_id,
                 clean("\n".join(error_text), 1800) or "取得できませんでした",
                 clean("\n".join(log_text[-5:]), 1000) or "取得できませんでした"))
-    return "\n\n".join(details) or "該当する失敗 Work Request を特定できませんでした。"
+    result = "\n\n".join(details) or "該当する失敗 Work Request を特定できませんでした。"
+    if config["_lookup_errors"]:
+        result += "\nOCI 情報取得エラー:\n" + clean("\n".join(config["_lookup_errors"]), 1200)
+    return result
 
 
 def log_diagnostic(log_path):
@@ -143,16 +163,39 @@ def log_diagnostic(log_path):
             lines = stream.readlines()[-1500:]
     except OSError:
         return "作成ログを読み取れませんでした。"
+    # Terraform prefixes streamed output and repeats it in a wrapped footer.
+    streamed = []
+    normalized = []
+    for line in lines:
+        line = ANSI.sub("", line).rstrip("\n")
+        match = re.match(r"^\S+ \(local-exec\):\s?(.*)$", line)
+        if match:
+            streamed.append(match.group(1))
+            normalized.append(match.group(1))
+        else:
+            normalized.append(re.sub(r"^\s*│\s?", "", line))
+    # Prefer the unwrapped stream when it contains the Ansible failure.
+    diagnostic_lines = streamed if any(
+        "FAILED!" in line or "UNREACHABLE!" in line for line in streamed) else normalized
     task = ""
     failures = []
-    errors = []
-    for line in lines:
+    errors = [line.strip() for line in normalized
+              if "Error:" in line or "Failed to " in line]
+    for index, line in enumerate(diagnostic_lines):
         if line.startswith("TASK ["):
             task = line.strip()
         if "FAILED!" in line or "UNREACHABLE!" in line:
-            failures.append("{}\n{}".format(task, line.strip()))
-        if "Error:" in line or "Failed to " in line:
-            errors.append(line.strip())
+            block = [task, line.strip()]
+            if "=>" in line and not line.rstrip().endswith("}"):
+                for following in diagnostic_lines[index + 1:index + 31]:
+                    if not following.strip() or following.startswith(("TASK [", "PLAY ", "fatal:")):
+                        break
+                    block.append(following.strip())
+                    if following.rstrip().endswith("}"):
+                        break
+            failure = "\n".join(block)
+            if failure not in failures:
+                failures.append(failure)
     if failures:
         return "Ansible: " + clean("\n".join(failures[-3:]), 4000)
     if errors:
@@ -166,7 +209,7 @@ def publish(config, message):
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             json.dump({"topicId": config["topic_id"], "title": message["title"],
                        "body": message["body"]}, stream, ensure_ascii=False)
-        command = [shutil.which("oci") or "oci", "ons", "message", "publish",
+        command = [oci_executable(), "ons", "message", "publish",
                    "--from-json", "file://" + input_path, "--region", config["region"],
                    "--max-retries", "0", "--connection-timeout", "5", "--read-timeout", "12"]
         if config["instance_principal"]:

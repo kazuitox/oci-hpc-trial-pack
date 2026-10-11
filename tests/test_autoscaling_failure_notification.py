@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -30,6 +31,65 @@ class AutoscalingFailureNotificationTests(unittest.TestCase):
             self.assertIn("node-1", result)
             self.assertIn("device is partitioned", result)
             self.assertNotIn("should-not-be-mailed", result)
+
+    def test_terraform_prefixed_ansible_failure_includes_task_and_avoids_footer_duplicate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "create.log"
+            log.write_text(
+                "null_resource.configure (local-exec): TASK [TEST - autoscaling setup script failure] ***\n"
+                'null_resource.configure (local-exec): fatal: [node-1]: FAILED! => {"stderr": "AUTOSCALING_SETUP_FAILURE_TEST", "rc": 1}\n'
+                "│ TASK [TEST - autoscaling setup script failure]\n"
+                '│ fatal: [node-1]: FAILED! => {"stderr":\n'
+                '│ "AUTOSCALING_SETUP_FAILURE_TEST", "rc": 1}\n', encoding="utf-8")
+            diagnostic = notify.log_diagnostic(log)
+            self.assertIn("TASK [TEST - autoscaling setup script failure]", diagnostic)
+            self.assertIn("AUTOSCALING_SETUP_FAILURE_TEST", diagnostic)
+            self.assertEqual(diagnostic.count("fatal: [node-1]"), 1)
+            self.assertNotIn("null_resource.configure", diagnostic)
+
+    def test_terraform_footer_only_keeps_multiline_failure_reason(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "create.log"
+            log.write_text(
+                "│ TASK [setup : Run setup script]\n"
+                '│ fatal: [node-1]: FAILED! => {"msg":\n'
+                '│ "setup script failed", "stderr": "failure marker"}\n'
+                "│\n│ PLAY RECAP\n", encoding="utf-8")
+            diagnostic = notify.log_diagnostic(log)
+            self.assertIn("TASK [setup : Run setup script]", diagnostic)
+            self.assertIn("setup script failed", diagnostic)
+            self.assertIn("failure marker", diagnostic)
+            self.assertNotIn("PLAY RECAP", diagnostic)
+
+    def test_notification_report_and_retry_find_user_cli_with_restricted_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "home"
+            cli = home / ".local/bin/oci"
+            cli.parent.mkdir(parents=True)
+            cli.write_text("#!" + sys.executable + "\n" +
+                           "import json,sys\n"
+                           "print(json.dumps({'data': []}))\n", encoding="utf-8")
+            cli.chmod(0o700)
+            config = {"region": "us-ashburn-1", "instance_principal": True,
+                      "topic_id": "ocid1.onstopic.test", "spool": str(root)}
+            with mock.patch.dict(os.environ, {"PATH": "/nonexistent"}), \
+                    mock.patch.object(notify.Path, "home", return_value=home):
+                self.assertEqual(notify.oci_json(config, "compute-management", "instance-pool", "list"), [])
+                message = {"id": "attempt", "topic_id": config["topic_id"],
+                           "title": "failed", "body": "failure detail"}
+                self.assertTrue(notify.publish(config, message))
+                notify.save_message(root, message)
+                notify.retry(config, root)
+                self.assertFalse((root / "attempt.json").exists())
+
+    def test_cli_fallback_uses_system_installation_and_preserves_path_precedence(self):
+        with mock.patch.object(notify.shutil, "which", return_value=None), \
+                mock.patch.object(notify.Path, "is_file", return_value=True), \
+                mock.patch.object(notify.os, "access", side_effect=lambda path, mode: str(path) == "/usr/local/bin/oci"):
+            self.assertEqual(notify.oci_executable(), "/usr/local/bin/oci")
+        with mock.patch.object(notify.shutil, "which", return_value="/custom/bin/oci"):
+            self.assertEqual(notify.oci_executable(), "/custom/bin/oci")
 
     def test_work_request_uses_failed_operation_for_current_resource(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -208,6 +268,8 @@ class AutoscalingFailureNotificationTests(unittest.TestCase):
                 self.assertIn("30m0s", message["body"])
                 self.assertIn("失敗 Work Request を特定できませんでした", message["body"])
                 self.assertIn("Job ID: 123", message["body"])
+                self.assertIn("OCI 情報取得エラー", message["body"])
+                self.assertIn("lookup denied", message["body"])
                 self.assertEqual(notify.main(["retry", "--config", str(config_path)]), 0)
             self.assertEqual(len(sent), 2)
             self.assertEqual(sent[0], sent[1])
