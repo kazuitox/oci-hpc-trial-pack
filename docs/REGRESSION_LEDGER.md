@@ -15,7 +15,7 @@
 | REG-005 | 通知の後始末は対象デプロイの所有物だけに限定する。保護対象・Terraform 管理 Topic・別デプロイの Topic を削除しない。不正な応答や所有権不明の状態を成功として処理しない。 | [test_slurm_oci_notification_cleanup.py](../tests/test_slurm_oci_notification_cleanup.py)：所有権、履歴、削除、消滅確認、失敗時の処理テスト。 |
 | REG-006 | 通知の実行時リソースの後始末は、必要な controller・権限が利用できる順序で行う。通常更新で後始末用リソースを置換せず、デプロイ ID と設定受け渡しを維持する。 | [test_slurm_notification_destroy_cleanup_terraform.py](../tests/test_slurm_notification_destroy_cleanup_terraform.py)：Terraform と配布テンプレートの静的検査。実際の destroy 順序は別途確認が必要。 |
 | REG-007 | OOD のユーザーマッピングは LDAP ユーザー名と想定するメール形式を扱い、存在しないユーザーや危険な入力を拒否する。 | [test_openondemand_user_mapping.py](../tests/test_openondemand_user_mapping.py)：設定検査と `getent` を置き換えた mapper の実行。 |
-| REG-008 | OpenComposer の Slurm ジョブ・History を OOD のヘッダー内から利用できる構成を維持する。アプリを事前登録し、JavaScript エラー時にも表示領域を失わない。 | [test_opencomposer_dashboard_link.py](../tests/test_opencomposer_dashboard_link.py)：Jinja2 のレンダリングと設定・HTML の検査。ブラウザー操作は含まない。 |
+| REG-008 | OpenComposer の Slurm ジョブ・History を「03 ジョブ管理」メニューから OOD のヘッダー内で利用できる構成を維持する。標準のジョブ投入・Active Jobs はトップ画面・メニュー・All Apps から非表示にする。Project Manager・Module Browser もメニュー・All Apps から非表示にし、空になった親メニューは表示しない。他のアプリと同じ親メニューの残りの項目は保持する。manifest 配置後に変更時のダッシュボード再起動を要求する。アプリを事前登録し、JavaScript エラー時にも表示領域を失わない。 | [test_opencomposer_dashboard_link.py](../tests/test_opencomposer_dashboard_link.py)：DCV 有効／無効の Jinja2 レンダリング、4機能の非表示用 category と自動グループ化の維持、manifest 配布・再起動順序、設定・HTML の検査。ブラウザー操作は含まない。 |
 | REG-009 | 非 MPI・MPI・OpenMP のプロファイルに対応する入力項目と SBATCH 設定を生成し、MPI 実行環境ごとの選択肢を維持する。 | [test_opencomposer_execution_profiles.py](../tests/test_opencomposer_execution_profiles.py)：フォームテンプレートの静的検査。実際の MPI 通信は含まない。 |
 | REG-010 | 通知フォームとジョブスクリプトを同じ有効条件で制御する。通知の選択は既定でオフとし、空の `--mail-type` や重複する指定を生成しない。 | [test_opencomposer_slurm_mail_notifications.py](../tests/test_opencomposer_slurm_mail_notifications.py)：フォームとスクリプト生成定義の静的検査。 |
 | REG-011 | OOD の CPU Cores 表示はノードごとの物理コアを集計し、HT 有効・無効の混在や重複ノードで誤集計しない。 | [test_openondemand_system_status_cores.py](../tests/test_openondemand_system_status_cores.py)：配置設定の検査と Ruby による集計処理の実行。Ruby がない場合は実行テストをスキップ。 |
@@ -52,7 +52,7 @@
 | REG-002 | 対象ノードの一時 Block Volume のアタッチ・マウントと削除を確認する。共有領域や対象外 Volume が残り、部分失敗時の記録から後始末を再開できる。 |
 | REG-003 / REG-004 / REG-010 | 通知有効・無効、登録済み・未登録のユーザーでジョブを投入する。選択したイベントだけが意図した宛先へ届き、送信失敗がジョブ進行を妨げない。HA 変更時はバックアップ側のレジストリ同期も確認する。 |
 | REG-005 / REG-006 | 通常更新で後始末が発火しないことを確認する。スタック削除の検証では、動的に作成された対象 Topic が削除され、対象外・保護対象 Topic が後始末処理から除外される。 |
-| REG-007 / REG-008 / REG-009 / REG-011 / REG-024 | [4.2.5 更新手順](openondemand-4.2.5-upgrade.md)に従い、4.0 系からの更新・再実行・認証と秘密値保持を確認する。OOD にログインし、メニュー・History・ヘッダー・CPU 表示を確認する。変更した実行プロファイルで生成スクリプトを確認し、小規模ジョブの完了を確認する。 |
+| REG-007 / REG-008 / REG-009 / REG-011 / REG-024 | [4.2.5 更新手順](openondemand-4.2.5-upgrade.md)に従い、4.0 系からの更新・再実行・認証と秘密値保持を確認する。OOD にログインし、メニュー・History・ヘッダー・CPU 表示を確認する。トップ画面・ヘッダー・All Apps に標準のジョブ投入・Active Jobs・Project Manager・Module Browser と空になった親メニューが表示されず、他の項目がある親メニューは残り、OpenComposer の Slurmジョブ・History とファイル・シェル・デスクトップ・対話型セッションが利用できることを、DCV 有効／無効と role 再実行後に確認する。変更した実行プロファイルで生成スクリプトを確認し、小規模ジョブの完了を確認する。 |
 | REG-012 | ジョブの constraint / partition に合うクラスターが作成されること、アイドル削除、permanent の保持、設定上限の適用を確認する。 |
 | REG-025 | [Ubuntu VNC の確認手順](openondemand-4.2.5-upgrade.md#ubuntu-2404-の-vnc-デスクトップ)に従い、新規ジョブのブラウザー接続、同一ユーザーの複数セッション、ログアウトと異常終了時の Slurm 状態を確認する。OL8 に修正版テンプレートが配布されないことも確認する。 |
 | REG-014 | 変更した CPU / GPU・VNC / DCV の組合せでデスクトップジョブを投入し、所定のキュー、ノード構成、ブラウザー接続を確認する。旧設定を使う更新でも互換動作が保たれる。 |

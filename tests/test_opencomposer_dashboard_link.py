@@ -106,7 +106,7 @@ class OpenComposerDashboardLinkTests(unittest.TestCase):
             "/var/www/ood/apps/sys/OpenComposer"
         )
         self.assertEqual(manifest["name"], "Slurmジョブ")
-        self.assertEqual(manifest["category"], "04 OpenComposer")
+        self.assertEqual(manifest["category"], "03 ジョブ管理")
         self.assertEqual(manifest["icon"], "fas://terminal")
         self.assertEqual(
             manifest["url"],
@@ -119,7 +119,7 @@ class OpenComposerDashboardLinkTests(unittest.TestCase):
             self.history_manifest_template.render()
         )
         self.assertEqual(manifest["name"], "History")
-        self.assertEqual(manifest["category"], "04 OpenComposer")
+        self.assertEqual(manifest["category"], "03 ジョブ管理")
         self.assertEqual(manifest["icon"], "fas://history")
         self.assertEqual(
             manifest["url"],
@@ -160,6 +160,98 @@ class OpenComposerDashboardLinkTests(unittest.TestCase):
         self.assertIn(
             'path: "/pun/sys/CustomComposer/history"', rendered
         )
+
+    def test_standard_job_apps_are_hidden_and_other_launchers_remain(self):
+        for dcv_enabled in (False, True):
+            with self.subTest(dcv_enabled=dcv_enabled):
+                config = yaml.safe_load(
+                    self.ondemand_config_template.render(
+                        ood_dcv_enabled=dcv_enabled
+                    )
+                )
+                self.assertNotIn("sys/activejobs", config["pinned_apps"])
+                self.assertNotIn("sys/myjobs", config["pinned_apps"])
+                for app in (
+                    "files", "bc_desktop", "shell", "system-status",
+                    "OpenComposer", "OpenComposerHistory",
+                ):
+                    self.assertIn("sys/" + app, config["pinned_apps"])
+                self.assertEqual(
+                    "sys/dcv" in config["pinned_apps"], dcv_enabled
+                )
+
+        # OOD 4.2.5's OodApp.should_appear_in_nav? excludes an empty
+        # category; navigation and All Apps both use that app list.
+        for app in ("activejobs", "myjobs"):
+            with self.subTest(app=app):
+                path = os.path.join(
+                    REPOSITORY_ROOT, "playbooks", "roles", "openondemand",
+                    "files", "var", "www", "ood", "apps", "sys", app,
+                    "manifest.yml",
+                )
+                with open(path, encoding="utf-8") as manifest_file:
+                    manifest = yaml.safe_load(manifest_file)
+                self.assertEqual(manifest["category"], "")
+
+    def test_manifest_updates_restart_dashboard_after_installation(self):
+        tasks_path = os.path.join(
+            REPOSITORY_ROOT, "playbooks", "roles", "openondemand",
+            "tasks", "ood_dashboard_customizations.yml",
+        )
+        with open(tasks_path, encoding="utf-8") as tasks_file:
+            tasks = yaml.safe_load(tasks_file)
+        override_index = next(
+            i for i, task in enumerate(tasks)
+            if task.get("register") == "ood_system_app_overrides"
+        )
+        overrides = tasks[override_index]
+        self.assertIn("activejobs/manifest.yml", overrides["loop"])
+        self.assertIn("myjobs/manifest.yml", overrides["loop"])
+        self.assertIn("projects/manifest.yml", overrides["loop"])
+        self.assertIn("module-browser/manifest.yml", overrides["loop"])
+        restart_index = next(
+            i for i, task in enumerate(tasks)
+            if task.get("ansible.builtin.file", {}).get("path")
+            == "/var/www/ood/apps/sys/dashboard/tmp/restart.txt"
+        )
+        self.assertGreater(restart_index, override_index)
+        self.assertIn(
+            "ood_system_app_overrides.changed", tasks[restart_index]["when"]
+        )
+        for manifest in (
+            "ood_opencomposer_dashboard_manifest",
+            "ood_opencomposer_history_manifest",
+        ):
+            self.assertIn(manifest + ".changed", tasks[restart_index]["when"])
+
+    def test_project_manager_and_module_browser_are_hidden(self):
+        for dcv_enabled in (False, True):
+            config = yaml.safe_load(
+                self.ondemand_config_template.render(ood_dcv_enabled=dcv_enabled)
+            )
+            # Keep OOD's automatic grouping: it removes categories with no
+            # visible apps while retaining categories with other apps.
+            self.assertNotIn("nav_bar", config)
+            self.assertNotIn("nav_categories", config)
+            for app, name, url in (
+                ("projects", "Project Manager", "projects"),
+                ("module-browser", "Module Browser", "module-browser"),
+            ):
+                with self.subTest(dcv_enabled=dcv_enabled, app=app):
+                    self.assertNotIn("sys/" + app, config["pinned_apps"])
+                    path = os.path.join(
+                        REPOSITORY_ROOT, "playbooks", "roles", "openondemand",
+                        "files", "var", "www", "ood", "apps", "sys", app,
+                        "manifest.yml",
+                    )
+                    with open(path, encoding="utf-8") as manifest_file:
+                        manifest = yaml.safe_load(manifest_file)
+                    self.assertEqual(manifest["category"], "")
+                    self.assertEqual(manifest["name"], name)
+                    self.assertEqual(manifest["url"], url)
+                    self.assertFalse(manifest["new_window"])
+                    if app == "projects":
+                        self.assertEqual(manifest["role"], "projects")
 
     def test_frame_keeps_the_ood_header_and_hides_opencomposer_nav(self):
         self.assertIn('class="opencomposer-frame"', self.frame_widget)
