@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.4.1] - 2026-10-11
+
 ### Fixed
 
 - OpenComposer の MPI プロファイルで、`VM (TCP)` と `BM Standard (TCP)` の Intel MPI オプションに `-genv I_MPI_COLL_EXTERNAL 0` を追加しました。既存環境は Open OnDemand role の再適用が必要です。
@@ -21,6 +23,10 @@
 ### Added
 
 - OpenComposer の History 表に Start Time・End Time・Elapsed Time・CPU Time を追加しました。Slurm の会計情報を表示し、Refresh ボタンで現在の検索条件・並び順・ページと残っている行の選択を保持して履歴結果だけを更新します。更新失敗時は元の表を保持します。既存環境は Open OnDemand role の再適用が必要です。
+
+### Compatibility / 検証
+
+- 利用者から、今回の変更を含む `master` のテスト完了報告を受けています。既存環境には Open OnDemand role の再適用が必要です。更新方法と確認範囲は [v1.4.1 リリースノート](docs/releases/v1.4.1.md)を参照してください。
 
 ## [v1.4.0] - 2026-10-11
 
