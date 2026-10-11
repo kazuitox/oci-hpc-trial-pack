@@ -4,3 +4,16 @@ scheduler: slurm
 login_node: {{ ood_servername | to_json }}
 bin: {{ ood_opencomposer_scheduler_bin | to_json }}
 copy_environment: {{ ood_opencomposer_copy_environment | bool | lower }}
+# Preserve the default columns and expose the Slurm accounting time fields.
+history:
+  - OC_HISTORY_JOB_NAME
+  - OC_HISTORY_PARTITION
+  - OC_HISTORY_SUBMISSION_TIME
+  - Start:
+      label: Start Time
+  - End:
+      label: End Time
+  - Elapsed:
+      label: Elapsed Time
+  - CPUTime:
+      label: CPU Time

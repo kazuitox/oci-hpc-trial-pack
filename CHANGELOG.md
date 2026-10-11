@@ -12,6 +12,10 @@
 
 - Open OnDemand のジョブ投入・確認メニューを OpenComposer に統一します。標準の「ジョブ投入」と「Active Jobs」をトップ画面、ヘッダーメニュー、「All Apps」の一覧から非表示にし、OpenComposer の「Slurmジョブ」「History」を表示します。標準アプリと既存データは保持し、manifest の変更後もダッシュボードの再起動を要求します。
 
+### Added
+
+- OpenComposer の History 表に Start Time・End Time・Elapsed Time・CPU Time を追加しました。Slurm の会計情報を表示し、Refresh ボタンで現在の検索条件・並び順・ページと残っている行の選択を保持して履歴結果だけを更新します。更新失敗時は元の表を保持します。既存環境は Open OnDemand role の再適用が必要です。
+
 ## [v1.4.0] - 2026-10-11
 
 ### Security / Fixed
