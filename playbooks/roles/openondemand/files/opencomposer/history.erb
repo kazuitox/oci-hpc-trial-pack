@@ -1,0 +1,254 @@
+<%# Derived from RIKEN-RCCS/OpenComposer v2.0.2 (MIT); see ../LICENSE. %>
+<% if @error_msg %>
+  <div class="alert alert-warning alert-dismissible mx-1 mb-0">
+    <%= @error_msg %>
+    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+  </div>
+<% end %>
+
+<%= output_action_modal("CancelJob") %>
+<%= output_action_modal("DeleteInfo") %>
+
+<div class="row px-3">
+  <div class="text-white bg-gradient" style="background:<%= @conf['description_color'] %>;">
+    <div class="d-flex justify-content-between align-items-end mb-2">
+      <div>
+        <%= output_action_badge("CancelJob") %>
+        <%= output_action_badge("DeleteInfo") %>
+        <button type="button" class="btn btn-sm btn-light" id="_historyRefresh">Refresh</button>
+        <span id="_historyRefreshStatus" role="status" aria-live="polite"></span>
+      </div>
+      <div class="text-end">
+        <div class="d-inline-block text-start" id="_historyFilterGroup">
+        <form id="filterForm" onsubmit="ocHistory.applyFilter(); return false;" class="w-100">
+          <% advanced_open = (@detail_open == 'true') %>
+          <div class="my-3 w-100">
+            <div id="_historyAdvancedWrapper">
+              <div class="input-group w-100">
+                <input type="text" autocomplete="off" spellcheck="false" class="form-control" aria-label="Filter" name="filter" value="<%= @filter %>" id="_filterInput">
+                <button class="btn btn-warning" type="submit" aria-label="Search">
+                  <i class="bi bi-search"></i>
+                </button>
+                <button
+                  class="btn btn-secondary <%= advanced_open ? 'active' : '' %>"
+                  type="button"
+                  id="_historyAdvancedToggle"
+                  aria-expanded="<%= advanced_open ? 'true' : 'false' %>"
+                  aria-controls="_historyAdvancedSearch"
+                >
+                  Detail <i class="bi <%= advanced_open ? 'bi-chevron-up' : 'bi-chevron-down' %>" id="_historyAdvancedToggleIcon"></i>
+                </button>
+              </div>
+            </div>
+            <div id="_historyAdvancedSearch" class="<%= advanced_open ? 'mt-2' : 'd-none' %>">
+              <div class="d-flex justify-content-start align-items-center mt-2">
+                <div class="form-check form-check-inline mb-0">
+                  <input class="form-check-input" type="radio" name="filter_mode" id="_historyFilterModeAnd" value="and" <%= 'checked' if @filter_mode != 'or' %>>
+                  <label class="form-check-label" for="_historyFilterModeAnd">AND Search</label>
+                </div>
+                <div class="form-check form-check-inline mb-0">
+                  <input class="form-check-input" type="radio" name="filter_mode" id="_historyFilterModeOr" value="or" <%= 'checked' if @filter_mode == 'or' %>>
+                  <label class="form-check-label" for="_historyFilterModeOr">OR Search</label>
+                </div>
+              </div>
+              <div class="mt-2">
+                <div class="input-group">
+                  <label class="input-group-text history-search-label" for="_historyFilterColumn">Field</label>
+                  <select class="form-select" id="_historyFilterColumn" name="filter_column">
+                    <% @filter_column_items.each do |value, label| %>
+                      <option value="<%= value %>" <%= 'selected' if @filter_column == value %>><%= label %></option>
+                    <% end %>
+                  </select>
+                </div>
+              </div>
+              <div class="mt-3">
+                <div class="input-group">
+                  <label class="input-group-text history-search-label" for="_historyDateRange">Range</label>
+                  <select class="form-select" id="_historyDateRange" name="date_range">
+                    <% @date_range_items.each do |value, label| %>
+                      <option value="<%= value %>" <%= 'selected' if @date_range == value %>><%= label %></option>
+                    <% end %>
+                  </select>
+                </div>
+              </div>
+              <div id="_historyCustomDates" class="d-flex justify-content-between gap-2 mt-3 <%= @date_range == 'custom' ? '' : 'd-none' %>">
+                <div class="input-group">
+                  <label class="input-group-text history-search-label" for="_historyDateFrom">From</label>
+                  <input
+                    type="date"
+                    class="form-control"
+                    id="_historyDateFrom"
+                    name="date_from"
+                    <%= @date_from && !@date_from.empty? ? "value=\"#{@date_from}\"" : "" %>
+                  >
+                </div>
+                <div class="input-group">
+                  <label class="input-group-text history-search-label" for="_historyDateTo">To</label>
+                  <input
+                    type="date"
+                    class="form-control"
+                    id="_historyDateTo"
+                    name="date_to"
+                    max="<%= Date.today.strftime('%Y-%m-%d') %>"
+                    <%= @date_to && !@date_to.empty? ? "value=\"#{@date_to}\"" : "" %>
+                  >
+                </div>
+              </div>
+            </div>
+          </div>
+        </form>
+        <div class="d-flex">
+          <div class="form-check form-check-inline">
+            <input class="form-check-input" type="checkbox" name="_historyStatusQueued" id="_historyStatusQueued" value="queued" <%= 'checked' if @statuses&.include?('queued') %>>
+            <label class="form-check-label" for="_historyStatusQueued">Queued</label>
+          </div>
+          <div class="form-check form-check-inline">
+            <input class="form-check-input" type="checkbox" name="_historyStatusRunning" id="_historyStatusRunning" value="running" <%= 'checked' if @statuses&.include?('running') %>>
+            <label class="form-check-label" for="_historyStatusRunning">Running</label>
+          </div>
+          <div class="form-check form-check-inline">
+            <input class="form-check-input" type="checkbox" name="_historyStatusCompleted" id="_historyStatusCompleted" value="completed" <%= 'checked' if @statuses&.include?('completed') %>>
+            <label class="form-check-label" for="_historyStatusCompleted">Completed</label>
+          </div>
+          <div class="form-check form-check-inline me-1">
+            <input class="form-check-input" type="checkbox" name="_historyStatusFailed" id="_historyStatusFailed" value="failed" <%= 'checked' if @statuses&.include?('failed') %>>
+            <label class="form-check-label" for="_historyStatusFailed">Failed</label>
+          </div>
+        </div>
+        <% if @conf.key?("clusters") && @conf["clusters"].size > 1 %>
+          <div class="d-flex mt-1">
+            <% @conf["clusters"].each_key.with_index do |name, index| %>
+              <% end_margin = index == @conf["clusters"].size - 1 ? "me-1" : "" %>
+              <div class="form-check form-check-inline <%= end_margin %>">
+                <input class="form-check-input" type="radio" name="_historyCluster" id="_historyCluster_<%= name %>" value="<%= name %>" <%= 'checked' if @cluster_name == name %>>
+                <label class="form-check-label" for="_historyCluster_<%= name %>"><%= name %></label>
+              </div>
+            <% end %>
+          </div>
+        <% end %>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="_historyResults" aria-live="polite">
+<% if @jobs.nil? || @jobs.empty? %>
+  <div class="mt-3 ms-2">
+    <p>(No Jobs)</p>
+  </div>
+<% else %>
+  <% @jobs.each do |job| %>
+    <%= output_job_id_modal(job, @filter) %>
+    <%= output_job_script_modal(job, @filter) %>
+  <% end %>
+
+  <div class="row px-3 table-responsive-sm">
+    <table class="table table-bordered mb-0 text-nowrap table-hover">
+      <thead>
+        <tr class="table-primary text-center">
+          <th><input class="form-check-input" type="checkbox" id="_historySelectAll" value="-1"></th>
+          <th class="text-wrap text-break">
+            <span>Job ID</span>
+            <%= output_history_sort_controls(JOB_ID) %>
+          </th>
+          <th class="text-wrap text-break">
+            <span>Application</span>
+            <%= output_history_sort_controls(JOB_APP_NAME) %>
+          </th>
+          <th class="text-wrap text-break">
+            <span>Script Location</span>
+            <%= output_history_sort_controls(HEADER_SCRIPT_LOCATION) %>
+          </th>
+          <th class="text-wrap text-break">
+            <span>Script Name</span>
+            <%= output_history_sort_controls(HEADER_SCRIPT_NAME) %>
+          </th>
+          <% @history_hash.each do |history_key, value| %>
+          <% table_key = HISTORY_KEY_MAP.fetch(history_key, history_key) %>
+          <th class="text-wrap text-break">
+            <span><%= value %></span>
+            <%= output_history_sort_controls(table_key) %>
+          </th>
+          <% end %>
+          <th class="text-wrap text-break">
+            <span>Status</span>
+            <%= output_history_sort_controls(JOB_STATUS_ID) %>
+          </th>
+        </tr>
+      </thead>
+      <tbody class="text-center" id="_historyTbody">
+        <% cached_related_apps = {} %>
+        <% @jobs.each do |job| %>
+          <% job_id_filter = history_highlight_filter(@filter, @filter_column, JOB_ID) %>
+          <% app_name_filter = history_highlight_filter(@filter, @filter_column, JOB_APP_NAME) %>
+          <% script_location_filter = history_highlight_filter(@filter, @filter_column, HEADER_SCRIPT_LOCATION) %>
+          <% script_name_filter = history_highlight_filter(@filter, @filter_column, HEADER_SCRIPT_NAME) %>
+          <% job_details_modal_match = job_details_modal_matches_filter?(job, job_id_filter) %>
+          <% job_script_modal_match = job_script_modal_matches_filter?(job, script_name_filter) %>
+          <tr data-status="<%= job[JOB_STATUS_ID] %>">
+            <td class="table-primary">
+              <input class="form-check-input" type="checkbox" id="ocJobId-<%= job[JOB_ID] %>" value="-1">
+            </td>
+            <td class="text-wrap text-break text-end history-modal-match-cell <%= 'history-modal-match-active' if job_details_modal_match %>">
+              <% if job[JOB_KEYS].nil? %>
+              <%= output_text(job[JOB_ID], job_id_filter) %>
+              <% else %>
+              <a href="#" data-bs-toggle="modal" data-bs-target="#_historyJobId<%= job[JOB_ID] %>"><%= output_text(job[JOB_ID], job_id_filter) %></a>
+              <% end %>
+            </td>
+            <td class="text-wrap text-break">
+              <a href="<%= File.join(@script_name.to_s, job[JOB_DIR_NAME].to_s) %>"><%= output_text(job[JOB_APP_NAME], app_name_filter) %></a>
+              <% directory_path = File.join(@apps_dir.to_s, job[JOB_DIR_NAME].to_s) %>
+              <% unless cached_related_apps.key?(directory_path) %>
+              <%   related_apps = create_manifest(directory_path)&.related_apps %>
+              <%   cached_related_apps[directory_path] = output_related_apps_icon(job[JOB_DIR_NAME].to_s, related_apps) %>
+              <% end %>
+              <% cached_related_apps[directory_path].each do |r| %>
+                <%= r %>
+              <% end %>
+            </td>
+            <td class="text-wrap text-break">
+              <a target="_blank" href="<%= @my_ood_url %>/pun/sys/dashboard/files/fs<%= job[HEADER_SCRIPT_LOCATION] %>"><%= output_text(job[HEADER_SCRIPT_LOCATION], script_location_filter) %></a>
+              <% unless @login_node.nil? %>
+                <a style="color: black; text-decoration: none; vertical-align: middle;" target="_blank" href="<%= @my_ood_url %>/pun/sys/shell/ssh/<%= @login_node %>/<%= job[HEADER_SCRIPT_LOCATION] %>">
+                  <i class="bi bi-terminal-fill fs-5"></i>
+                </a>
+              <% end %>
+            </td>
+            <td class="text-wrap text-break history-modal-match-cell <%= 'history-modal-match-active' if job_script_modal_match %>">
+              <a href="#" data-bs-toggle="modal" data-bs-target="#_historyJobScript<%= job[JOB_ID] %>"><%= output_text(job[HEADER_SCRIPT_NAME], script_name_filter) %></a>
+            </td>
+            <% @history_hash.each_key do |k| %>
+              <td class="text-wrap text-break">
+                <% key = HISTORY_KEY_MAP.fetch(k, k) %>
+                <%= output_text(format_history_table_value(key, job[key]), history_highlight_filter(@filter, @filter_column, key)) %>
+              </td>
+            <% end %>
+            <td class="text-wrap text-break"><%= output_status(job[JOB_STATUS_ID]) %></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  </div>
+<% end %>
+
+<% if @jobs_size > 0 %>
+<div class="row mt-2 mx-1">
+  <div class="col text-start">
+    <div>Showing <%= @start_index + 1 %> to <%= @end_index + 1 %> of <%= @jobs_size %> entries (<%= @history_search_elapsed_label %> sec.)</div>
+    <div>Show
+      <input type="number" id="_historyRows" value=<%= @rows %> style="width: 80px;" onkeydown="if(event.key === 'Enter') ocHistory.redirectWithRows()" >
+      entries
+    </div>
+  </div>
+  <div class="col text-center">
+    <%= output_pagination(@current_page, @page_size, @rows) %>
+  </div>
+  <div class="col text-end"></div>
+</div>
+<% end %>
+
+</div>
+<script src="./history.js"></script>
+<script src="./history-refresh.js"></script>
