@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- OpenComposer History の Start Time・End Time を Submission Time と同じ `YYYY-MM-DD HH:MM:SS` 形式に揃え、日付と時刻の区切りを空白にしました。
+
 ### Changed
 
 - OpenComposer のメニュー名を「04 OpenComposer」から「03 ジョブ管理」に変更します。「Slurmジョブ」と「History」は同じメニュー内に表示します。

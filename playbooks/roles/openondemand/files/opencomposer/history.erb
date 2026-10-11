@@ -222,7 +222,8 @@
             <% @history_hash.each_key do |k| %>
               <td class="text-wrap text-break">
                 <% key = HISTORY_KEY_MAP.fetch(k, k) %>
-                <%= output_text(format_history_table_value(key, job[key]), history_highlight_filter(@filter, @filter_column, key)) %>
+                <% display_key = %w[Start End].include?(key) ? JOB_SUBMISSION_TIME : key %>
+                <%= output_text(format_history_table_value(display_key, job[key]), history_highlight_filter(@filter, @filter_column, key)) %>
               </td>
             <% end %>
             <td class="text-wrap text-break"><%= output_status(job[JOB_STATUS_ID]) %></td>

@@ -50,6 +50,8 @@ class OpenComposerHistoryTests(unittest.TestCase):
         harness = r'''
 require 'erb'
 require 'date'
+require 'time'
+JOB_SUBMISSION_TIME='Submission Time'
 JOB_ID='id'; JOB_APP_NAME='app'; JOB_DIR_NAME='dir'; JOB_STATUS_ID='status'
 JOB_KEYS='keys'; HEADER_SCRIPT_LOCATION='location'; HEADER_SCRIPT_NAME='script'
 HISTORY_KEY_MAP={}
@@ -58,7 +60,7 @@ HISTORY_KEY_MAP={}
 @statuses=['running']; @script_name='/pun/sys/OpenComposer'; @apps_dir='/apps'
 @my_ood_url=''; @login_node=nil; @rows=10; @current_page=1; @page_size=1
 @start_index=0; @end_index=0; @history_search_elapsed_label='0.001'
-@history_hash={'Start'=>'Start Time', 'End'=>'End Time', 'Elapsed'=>'Elapsed Time', 'CPUTime'=>'CPU Time'}
+@history_hash={JOB_SUBMISSION_TIME=>'Submission Time', 'Start'=>'Start Time', 'End'=>'End Time', 'Elapsed'=>'Elapsed Time', 'CPUTime'=>'CPU Time'}
 def output_action_modal(*); ''; end
 def output_action_badge(*); ''; end
 def output_job_id_modal(*); '<div class="modal"></div>'; end
@@ -71,15 +73,32 @@ def create_manifest(*); nil; end
 def output_related_apps_icon(*); []; end
 def output_status(v); v; end
 def output_pagination(*); 'pagination'; end
-def format_history_table_value(k,v); v; end
+# Match the pinned OpenComposer v2.0.2 formatter used for Submission Time.
+def format_history_table_value(key, value)
+  return value unless key == JOB_SUBMISSION_TIME
+  Time.parse(value.to_s).strftime("%Y-%m-%d %H:%M:%S")
+rescue ArgumentError
+  value
+end
 def output_text(v,*); ERB::Util.html_escape(v.to_s); end
 @jobs=ARGV[1]=='empty' ? [] : [{JOB_ID=>'42', JOB_APP_NAME=>'Slurm', JOB_DIR_NAME=>'slurm',
 HEADER_SCRIPT_LOCATION=>'/work', HEADER_SCRIPT_NAME=>'job.sh', JOB_STATUS_ID=>'Running',
-'Start'=>'2026-10-11T10:00:00', 'End'=>'Unknown', 'Elapsed'=>'01:00:00', 'CPUTime'=>'08:00:00'}]
+JOB_SUBMISSION_TIME=>'2026-10-11T09:00:00',
+'Start'=>'2026-10-11T10:00:00', 'End'=>'2026-10-11T15:08:38', 'Elapsed'=>'01:00:00', 'CPUTime'=>'08:00:00'}]
+unless @jobs.empty?
+  case ARGV[1]
+  when 'unknown'
+    @jobs[0]['Start']='Unknown'; @jobs[0]['End']='Unknown'
+  when 'blank'
+    @jobs[0]['Start']=nil; @jobs[0]['End']=''
+  when 'formatted'
+    @jobs[0]['Start']='2026-10-11 10:00:00'; @jobs[0]['End']='2026-10-11 15:08:38'
+  end
+end
 @jobs_size=@jobs.size
 puts ERB.new(File.read(ARGV[0])).result(binding)
 '''
-        for state in ['populated', 'empty']:
+        for state in ['populated', 'empty', 'unknown', 'blank', 'formatted']:
             result = subprocess.run(['ruby', '-e', harness, str(UI / 'history.erb'), state],
                                     capture_output=True, text=True, check=True)
             html = result.stdout
@@ -87,10 +106,19 @@ puts ERB.new(File.read(ARGV[0])).result(binding)
             self.assertIn('id="_historyResults"', html)
             self.assertLess(html.index('</div>\n<script src="./history.js">'),
                             html.index('history-refresh.js'))
-            if state == 'populated':
+            if state != 'empty':
                 for text in ['Start Time', 'End Time', 'Elapsed Time', 'CPU Time',
-                             '2026-10-11T10:00:00', 'Unknown', '01:00:00', '08:00:00']:
+                             '2026-10-11 09:00:00', '01:00:00', '08:00:00']:
                     self.assertIn(text, html)
+                if state in ('populated', 'formatted'):
+                    self.assertIn('2026-10-11 10:00:00', html)
+                    self.assertIn('2026-10-11 15:08:38', html)
+                    self.assertNotIn('2026-10-11T', html)
+                elif state == 'unknown':
+                    self.assertEqual(html.count('Unknown'), 2)
+                else:
+                    self.assertNotIn('2026-10-11 10:00:00', html)
+                    self.assertNotIn('2026-10-11 15:08:38', html)
                 self.assertNotIn('d-none d-lg-table-cell', html)
             else:
                 self.assertIn('(No Jobs)', html)
