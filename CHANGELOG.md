@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.4.0] - 2026-10-11
+
 ### Security / Fixed
 
 - Ubuntu 24.04 の `bc_desktop` で Xfce の起動スクリプト全体を専用 D-Bus セッション内で実行し、既存セッションとの競合を防ぎます。SAFE_PATH と他のデスクトップの `source` 方式を保持し、異常終了が末尾のログ出力で正常終了に変わらないよう終了コードを返します。Ubuntu の VNC 計算ノードには `dbus-daemon` を導入します。Oracle Linux 8 は変更しません。
@@ -13,7 +15,7 @@
 - Open OnDemand を 4.2.5、Dex を 2.45.1 に固定し、新規構築と既存環境の更新に対応しました。4.2 系リポジトリと Node.js 22 を使用し、ファイル転送の脆弱性 GHSA-frjp-qp79-hc3g の修正版を導入します。
 - OIDC 暗号用秘密値をコントローラ上で生成・保存して再利用し、認証設定を root のみが読めるようにしました。ポータル生成の失敗を Apache の起動・再読み込みで無視しません。
 - 標準 `ood_app.rb` の旧版コピーによる上書きを廃止し、日本語のホームディレクトリ表示を翻訳設定へ移しました。OpenComposer の再実行で管理対象の変更を保持し、Ubuntu の導入タスクと Slurm パスも対応しました。
-- 更新後は NGINX アプリ設定と PUN を更新し、最後に完了記録を保存します。途中失敗後の再実行でも更新完了処理を省略しません。[OOD 専用 playbook と更新・復旧手順](docs/openondemand-4.2.5-upgrade.md)、秘密値の永続化・同時実行・認証設定の回帰テストを追加しました。実環境での更新と独自アプリの互換性確認は未実施です。
+- 更新後は NGINX アプリ設定と PUN を更新し、最後に完了記録を保存します。途中失敗後の再実行でも更新完了処理を省略しません。[OOD 専用 playbook と更新・復旧手順](docs/openondemand-4.2.5-upgrade.md)、秘密値の永続化・同時実行・認証設定の回帰テストを追加しました。利用者から OOD 関連修正の動作確認完了報告を受けています。すべての更新経路・独自アプリの互換性確認を示すものではありません。
 
 ### Fixed
 
@@ -27,6 +29,10 @@
 
 - 初回デプロイ時に課金タグ全体を選択できる `cost_tags_enabled`（既定値 `true`）を追加しました。Resource Manager の SIMPLE / ADVANCED 両モードで選択できます。無効時は `hpc-cost.User` の定義作成・初期ノードと Autoscaling ノードへの付与・Slurm 利用者による更新を行わず、ノード複製でも既存の課金タグを変更しません。所有権・一時 Block Volume の管理タグは維持します。
 - 課金タグ・IAM 自動作成・Slurm 通知がすべて無効の場合は、テナンシ／ホームリージョンの参照を省略します。既存のタグ定義の state アドレスは `moved` で引き継ぎ、`prevent_destroy` で削除を保護します。定義を含む既存スタックの無効化・destroy は保護の解除または管理元の引継ぎが必要です。更新だけを止める場合は、従来の `slurm_user_tags_enabled=false` を使用します。
+
+### Compatibility / 検証
+
+- 統合後の全件回帰テスト565件と localdisk 関連42件は失敗0件でした。スキップはそれぞれ21件、3件です。利用者から統合対象の動作確認完了報告を受けています。既存環境への影響と確認範囲は [v1.4.0 リリースノート](docs/releases/v1.4.0.md)を参照してください。
 
 ## [v1.3.3] - 2026-10-05
 
@@ -140,4 +146,5 @@
 
 [v1.3.1]: https://github.com/kazuitox/oci-hpc-trial-pack/releases/tag/v1.3.1
 
+[v1.4.0]: https://github.com/kazuitox/oci-hpc-trial-pack/releases/tag/v1.4.0
 [v1.3.3]: https://github.com/kazuitox/oci-hpc-trial-pack/releases/tag/v1.3.3

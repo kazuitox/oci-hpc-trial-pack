@@ -1,6 +1,6 @@
 # OCI HPC Trial Pack
 
-[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/kazuitox/oci-hpc-trial-pack/archive/refs/tags/v1.3.3.zip)
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/kazuitox/oci-hpc-trial-pack/archive/refs/tags/v1.4.0.zip)
 
 本リポジトリは、Oracle Cloud Infrastructure (OCI) 上に HPC 環境を短時間で構築し、PoC や初期検証をすばやく開始することを目的としています。
 この目的に合わせて、現時点では Oracle Linux 8 を対象 OS として動作確認しています。その他の OS やバージョンについては未検証のため、利用する場合は個別に検証してください。
@@ -16,7 +16,7 @@ Resource Manager 用のルート構成は Terraform **1.5.x** を対象にして
 - フォルダをアップロードするときは、`versions.tf`、`schema.yaml`、`variables.tf` が直下にあるリポジトリのルートを選択します。`autoscaling/tf_init/` はコントローラ上で実行する別構成なので選択しません。
 - アップロード後、スタック作成画面の Terraform バージョンが **1.5.x** になっていることを確認します。`Invalid Terraform version: .` が表示された場合は、修正済みの `versions.tf` を含むフォルダを再選択し、作業ディレクトリとバージョン欄を確認してください。画面側で値が空のままの場合は、選択状態・アップロード結果を別途確認する必要があります。
 - 手動 ZIP を使う場合も、同じファイルを ZIP のルート（または明示した作業ディレクトリ）に置きます。`.git`、`.terraform`、Terraform state、秘密鍵、実環境ログを含めないでください。未コミットの修正を試す場合、`git archive HEAD` では変更内容や新規ファイルが入りません。
-- 上のデプロイボタンは v1.3.3 を使います。未公開のローカル修正の試験には、更新後のフォルダまたは ZIP を使ってください。
+- 上のデプロイボタンは v1.4.0 を使います。未公開のローカル修正の試験には、更新後のフォルダまたは ZIP を使ってください。
 
 この上限制約はルート構成をローカル CLI で実行する場合にも適用されます。一方、Autoscaling 用の `autoscaling/tf_init/versions.tf` は Resource Manager でのバージョン選択には使わず、従来どおり Terraform **1.5.0 以上**を許可します。コントローラ側の Terraform を 1.5 系へ固定する変更ではありません。
 
@@ -36,9 +36,13 @@ Resource Manager 用のルート構成は Terraform **1.5.x** を対象にして
 
 既存コントローラーへの更新では、変更した Ansible タスクと `playbooks/library/slurm_topology.py` を一緒に配布してください。修正箇所、失敗時の動作、配布・切り戻し、フォーク元との違いは[調査・更新手順](docs/autoscaling-topology-identity.md)にまとめています。v1.3.3 の動作確認報告と検証範囲は[リリースノート](docs/releases/v1.3.3.md#検証結果と確認範囲)を参照してください。
 
+## v1.4.0への更新
+
+v1.4.0 は、課金タグの有効・無効の選択機能を追加し、Open OnDemand を4.2.5へ更新したリリースです。Slurm 初回起動、Ubuntu Autoscaling の LDAP 再起動、Ubuntu VNC デスクトップ、内蔵 NVMe の LVM 構成も修正しています。既存環境では、課金タグ定義の削除保護、OOD の認証設定と更新手順、localdisk ロール全体の配布に注意してください。変更内容と確認範囲は [v1.4.0 リリースノート](docs/releases/v1.4.0.md)を参照してください。
+
 ## v1.3.3への更新
 
-v1.3.3 は、Autoscaling の実行ユーザー判定、Slurm の起動待機、topology の Switch 名照合を修正したパッチです。既存コントローラには、新しい待機スクリプト・タスク・共通モジュールを含めて配布してください。変更内容、更新手順、検証範囲は[リリースノート](docs/releases/v1.3.3.md)にまとめています。上のデプロイボタンは v1.3.3 に固定しています。
+v1.3.3 は、Autoscaling の実行ユーザー判定、Slurm の起動待機、topology の Switch 名照合を修正したパッチです。既存コントローラには、新しい待機スクリプト・タスク・共通モジュールを含めて配布してください。変更内容、更新手順、検証範囲は[リリースノート](docs/releases/v1.3.3.md)にまとめています。
 
 ## v1.3.2への更新
 
