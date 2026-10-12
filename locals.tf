@@ -39,7 +39,7 @@ locals {
   controller_username                 = local.use_imported_compute_image_for_controller ? local.compute_username : var.controller_username
 
   # Only features managing home-region resources need tenancy discovery.
-  needs_home_region = var.cost_tags_enabled || var.create_iam_policy_dynamic_group || var.slurm_job_notifications_enabled
+  needs_home_region = var.cost_tags_enabled || var.create_iam_policy_dynamic_group || var.slurm_job_notifications_enabled || var.autoscaling_failure_notifications_enabled
   region_map = {
     for region in (local.needs_home_region ? data.oci_identity_regions.regions[0].regions : []) :
     region.key => region.name
