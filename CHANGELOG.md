@@ -6,6 +6,8 @@
 
 ### Fixed
 
+- Autoscaling 作成失敗通知だけを有効にした構成で、通知用 Dynamic Group をデプロイ先リージョンに作成しようとして `403-NotAllowed` になる不具合を修正しました。通知が有効な場合もホームリージョンを取得し、Dynamic Group と IAM Policy をそこに作成します。Topic と EMAIL Subscription の作成先は変更しません。
+
 - Autoscaling 作成失敗通知の冒頭に `Failure phase` を追加し、ログの根拠から「インスタンス作成」「セットアップ」を表示します。判定できない失敗は明示し、セットアップ失敗時は Work Request 欄を省略します。
 
 - Autoscaling の Ansible セットアップ失敗通知から、無関係な「失敗 Work Request を特定できませんでした」の欄を除きました。Ansible 失敗を検出した場合は Work Request の情報取得も省略し、インスタンス作成失敗時の診断は維持します。

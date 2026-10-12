@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +19,25 @@ SPEC.loader.exec_module(notify)
 
 
 class AutoscalingFailureNotificationTests(unittest.TestCase):
+    def test_home_region_discovery_includes_failure_notifications_alone(self):
+        local = (ROOT / "locals.tf").read_text(encoding="utf-8")
+        expression = re.search(r"(?m)^\s*needs_home_region\s*=\s*(.+)$", local).group(1)
+        # Each feature independently requires IAM writes in the home region.
+        # In particular, failure notifications must work with all other flags off.
+        self.assertEqual(set(expression.split(" || ")), {
+            "var.cost_tags_enabled",
+            "var.create_iam_policy_dynamic_group",
+            "var.slurm_job_notifications_enabled",
+            "var.autoscaling_failure_notifications_enabled",
+        })
+        provider = (ROOT / "provider.tf").read_text(encoding="utf-8")
+        self.assertRegex(provider, r'alias\s*=\s*"home"\s+region\s*=\s*local\.home_region')
+        resources = (ROOT / "notifications.tf").read_text(encoding="utf-8")
+        for kind in ("oci_identity_dynamic_group", "oci_identity_policy"):
+            block = resources.split('resource "{}" "autoscaling_failure_controllers" {{'.format(kind), 1)[1].split("\n}", 1)[0]
+            self.assertRegex(block, r"provider\s*=\s*oci\.home")
+            self.assertRegex(block, r"count\s*=\s*var\.autoscaling_failure_notifications_enabled \? 1 : 0")
+
     def test_ansible_failure_reports_task_host_and_message_without_secret(self):
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "create.log"
