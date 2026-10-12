@@ -303,14 +303,19 @@ def main(argv=None):
     if not all((args.cluster, args.queue, args.instance_type, args.nodes, args.mode,
                 args.started, args.log, args.workspace)):
         parser.error("report requires cluster, queue, instance-type, nodes, mode, started, log and workspace")
+    failure = log_diagnostic(args.log)
     body = ("Cluster: {}\nQueue: {}\nInstance type: {}\nNodes: {}\nJob ID: {}\n"
             "Started (UTC): {}\nMode: {}\nCreation log: {}\n\n"
-            "Failure:\n{}\n\nOCI Work Request:\n{}").format(
+            "Failure:\n{}").format(
         clean(args.cluster, 150), clean(args.queue, 150), clean(args.instance_type, 150),
         clean(args.nodes, 30), clean(args.job_id or "-", 100),
         datetime.datetime.fromtimestamp(args.started, datetime.timezone.utc).isoformat(),
-        args.mode, clean(args.log, 300), log_diagnostic(args.log),
-        work_request_details(config, args.workspace, args.mode, args.cluster, args.started))
+        args.mode, clean(args.log, 300), failure)
+    # Ansible setup runs after instance provisioning; its failure has no OCI
+    # creation work request to diagnose. Keep OCI diagnostics for other failures.
+    if not failure.startswith("Ansible: "):
+        body += "\n\nOCI Work Request:\n" + work_request_details(
+            config, args.workspace, args.mode, args.cluster, args.started)
     message = {
         "id": "{}-{}".format(args.started, re.sub(r"[^A-Za-z0-9_-]", "_", args.cluster)),
         "topic_id": config["topic_id"],

@@ -143,6 +143,8 @@ HPC_OL8
 
 ### 作成失敗の管理者通知
 
+Ansible の `FAILED!` / `UNREACHABLE!` を検出したセットアップ失敗では、失敗タスク・ホスト・理由を通知し、OCI Work Request の取得・表示は行いません。インスタンス作成失敗や原因を判定できない失敗では、従来どおり OCI Work Request の診断を付けます。
+
 Cluster Network の作成がタイムアウトした場合は、親の Work Request に加え、Cluster Network の詳細に含まれる所属 Instance Pool の失敗 Work Request も収集します。親が `PROVISIONING` のままでも、Pool 側に記録された `QuotaExceeded` などの原因を通知できます。Pool の所属関係は API の OCID で確認し、同じ表示名の別 Pool は診断対象にしません。Work Request 情報には対象リソース OCID と status も記載します。
 
 OCI CLI は PATH を優先し、見つからない場合は実行ユーザーの `~/.local/bin/oci`・`~/bin/oci`、`/usr/local/bin/oci`・`/usr/bin/oci` の実行可能ファイルを探索します。これらにもない場合は、OCI 情報取得エラーを診断に残し、通知送信は失敗として再送対象を保持します。再送 cron もユーザーの CLI 配置先を PATH に含めます。既存環境には通知プログラムを配布し、cron 更新はスタックの Plan を確認してから Apply してください。

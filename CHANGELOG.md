@@ -6,6 +6,8 @@
 
 ### Fixed
 
+- Autoscaling の Ansible セットアップ失敗通知から、無関係な「失敗 Work Request を特定できませんでした」の欄を除きました。Ansible 失敗を検出した場合は Work Request の情報取得も省略し、インスタンス作成失敗時の診断は維持します。
+
 - Cluster Network 作成失敗通知で、OCI が内部に作成する Instance Pool の失敗 Work Request を取り逃していた不具合を修正しました。特定した Cluster Network の詳細から所属 Pool の OCID を取得し、その Pool の operation・error・log を削除前に収集します。Terraform state に独立した Pool がない場合も対象とし、同名の別 Pool は採用しません。
 
 - Autoscaling 作成失敗通知は PATH に OCI CLI がない場合も Controller ユーザーの `.local/bin`・`bin` と `/usr/local/bin`・`/usr/bin` を探索します。再送 cron の PATH にユーザーの配置先を追加し、情報取得失敗の理由をメールにも記載します。Terraform の接頭辞を除いて Ansible の失敗タスク名と複数行の理由を抽出し、末尾の重複表示を避けます。

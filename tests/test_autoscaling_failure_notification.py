@@ -91,6 +91,40 @@ class AutoscalingFailureNotificationTests(unittest.TestCase):
         with mock.patch.object(notify.shutil, "which", return_value="/custom/bin/oci"):
             self.assertEqual(notify.oci_executable(), "/custom/bin/oci")
 
+    def test_ansible_report_omits_work_requests_and_never_queries_compute_apis(self):
+        for mode in ["pool", "network", "compute"]:
+            for failure in ["FAILED!", "UNREACHABLE!"]:
+                with self.subTest(mode=mode, failure=failure), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    config = root / "config.json"
+                    config.write_text(json.dumps({
+                        "enabled": True, "topic_id": "ocid1.onstopic.test", "spool": str(root / "spool")
+                    }), encoding="utf-8")
+                    log = root / "create.log"
+                    log.write_text(
+                        "null_resource.configure (local-exec): TASK [setup : Run script] ***\n"
+                        'null_resource.configure (local-exec): fatal: [node-1]: ' + failure +
+                        ' => {"msg": "SETUP_FAILURE_TEST"}\n', encoding="utf-8")
+                    delivered = []
+                    with mock.patch.object(notify, "work_request_details") as work_requests, \
+                            mock.patch.object(notify, "oci_json") as lookup, \
+                            mock.patch.object(notify, "publish", side_effect=lambda _, message: delivered.append(message) or True):
+                        self.assertEqual(notify.main([
+                            "report", "--config", str(config), "--cluster", "cluster-a",
+                            "--queue", "compute", "--instance-type", "default", "--nodes", "1",
+                            "--job-id", "4", "--mode", mode, "--started", "1791724742",
+                            "--log", str(log), "--workspace", str(root),
+                        ]), 0)
+                    work_requests.assert_not_called()
+                    lookup.assert_not_called()
+                    self.assertEqual(len(delivered), 1)
+                    body = delivered[0]["body"]
+                    self.assertIn("TASK [setup : Run script]", body)
+                    self.assertIn("node-1", body)
+                    self.assertIn("SETUP_FAILURE_TEST", body)
+                    self.assertNotIn("OCI Work Request", body)
+                    self.assertNotIn("特定できませんでした", body)
+
     def test_work_request_uses_failed_operation_for_current_resource(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
