@@ -223,6 +223,27 @@ def log_diagnostic(log_path):
     return "ログに具体的なエラー行がありません。終了コードと作成ログを確認してください。"
 
 
+def failure_phase(log_path, diagnostic):
+    if diagnostic.startswith("Ansible: ") or any(message in diagnostic for message in (
+            "Failed to configure autoscaling nodes", "Failed to configure nodes",
+            "Failed to prepare autoscaling OS hostnames")):
+        return "セットアップ"
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as stream:
+            evidence = ANSI.sub("", "".join(stream.readlines()[-1500:]))
+    except OSError:
+        return "判定できませんでした"
+    # Terraform's error resource identifies the stage, unlike its generic
+    # 'local-exec provisioner error' or 'Error:' heading alone.
+    if re.search(r"\bwith null_resource\.configure\b", evidence):
+        return "セットアップ"
+    if re.search(r"\bwith oci_core_(?:instance|instance_pool|cluster_network|compute_cluster)\.", evidence):
+        return "インスタンス作成"
+    if "timeout while waiting for state" in diagnostic and "'PROVISIONING'" in diagnostic:
+        return "インスタンス作成"
+    return "判定できませんでした"
+
+
 def publish(config, message):
     descriptor, input_path = tempfile.mkstemp(prefix=".publish-", dir=config["spool"])
     try:
@@ -304,16 +325,17 @@ def main(argv=None):
                 args.started, args.log, args.workspace)):
         parser.error("report requires cluster, queue, instance-type, nodes, mode, started, log and workspace")
     failure = log_diagnostic(args.log)
+    phase = failure_phase(args.log, failure)
     body = ("Cluster: {}\nQueue: {}\nInstance type: {}\nNodes: {}\nJob ID: {}\n"
-            "Started (UTC): {}\nMode: {}\nCreation log: {}\n\n"
+            "Started (UTC): {}\nMode: {}\nFailure phase: {}\nCreation log: {}\n\n"
             "Failure:\n{}").format(
         clean(args.cluster, 150), clean(args.queue, 150), clean(args.instance_type, 150),
         clean(args.nodes, 30), clean(args.job_id or "-", 100),
         datetime.datetime.fromtimestamp(args.started, datetime.timezone.utc).isoformat(),
-        args.mode, clean(args.log, 300), failure)
+        args.mode, phase, clean(args.log, 300), failure)
     # Ansible setup runs after instance provisioning; its failure has no OCI
     # creation work request to diagnose. Keep OCI diagnostics for other failures.
-    if not failure.startswith("Ansible: "):
+    if phase != "セットアップ":
         body += "\n\nOCI Work Request:\n" + work_request_details(
             config, args.workspace, args.mode, args.cluster, args.started)
     message = {

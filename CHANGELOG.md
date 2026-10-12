@@ -6,6 +6,8 @@
 
 ### Fixed
 
+- Autoscaling 作成失敗通知の冒頭に `Failure phase` を追加し、ログの根拠から「インスタンス作成」「セットアップ」を表示します。判定できない失敗は明示し、セットアップ失敗時は Work Request 欄を省略します。
+
 - Autoscaling の Ansible セットアップ失敗通知から、無関係な「失敗 Work Request を特定できませんでした」の欄を除きました。Ansible 失敗を検出した場合は Work Request の情報取得も省略し、インスタンス作成失敗時の診断は維持します。
 
 - Cluster Network 作成失敗通知で、OCI が内部に作成する Instance Pool の失敗 Work Request を取り逃していた不具合を修正しました。特定した Cluster Network の詳細から所属 Pool の OCID を取得し、その Pool の operation・error・log を削除前に収集します。Terraform state に独立した Pool がない場合も対象とし、同名の別 Pool は採用しません。

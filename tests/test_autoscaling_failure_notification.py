@@ -122,8 +122,29 @@ class AutoscalingFailureNotificationTests(unittest.TestCase):
                     self.assertIn("TASK [setup : Run script]", body)
                     self.assertIn("node-1", body)
                     self.assertIn("SETUP_FAILURE_TEST", body)
+                    self.assertIn("Failure phase: セットアップ\n", body)
+                    self.assertLess(body.index("Failure phase:"), body.index("Creation log:"))
                     self.assertNotIn("OCI Work Request", body)
                     self.assertNotIn("特定できませんでした", body)
+
+    def test_failure_phase_uses_stage_evidence_and_keeps_unknown_errors_unknown(self):
+        cases = [
+            ("TASK [setup]\nfatal: [node]: FAILED! => {}\n", "セットアップ"),
+            ("Error: local-exec provisioner error\n│ with null_resource.configure,\n", "セットアップ"),
+            ("Failed to prepare autoscaling OS hostnames for cluster-a\n", "セットアップ"),
+            ("Error: QuotaExceeded\n│ with oci_core_cluster_network.cluster_network[0],\n", "インスタンス作成"),
+            ("Error: QuotaExceeded\n│ with oci_core_instance.compute_cluster_instances[0],\n", "インスタンス作成"),
+            ("Error: timeout while waiting for state (last state: 'PROVISIONING')\n", "インスタンス作成"),
+            ("Error: unrelated failure\n", "判定できませんでした"),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "create.log"
+            for source, expected in cases:
+                with self.subTest(source=source):
+                    log.write_text(source, encoding="utf-8")
+                    self.assertEqual(notify.failure_phase(log, notify.log_diagnostic(log)), expected)
+            missing = Path(directory) / "missing.log"
+            self.assertEqual(notify.failure_phase(missing, notify.log_diagnostic(missing)), "判定できませんでした")
 
     def test_work_request_uses_failed_operation_for_current_resource(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -232,6 +253,7 @@ class AutoscalingFailureNotificationTests(unittest.TestCase):
                     ]), 0)
                 self.assertEqual(len(delivered), 1)
                 body = delivered[0]["body"]
+                self.assertIn("Failure phase: インスタンス作成\n", body)
                 for value in ["PROVISIONING", "LaunchInstancesInPool", "QuotaExceeded",
                               "optimized3-core-count", "by 36", pool_id, request_id]:
                     self.assertIn(value, body)
@@ -419,6 +441,7 @@ class AutoscalingFailureNotificationTests(unittest.TestCase):
                 messages = list(spool.glob("*.json"))
                 self.assertEqual(len(messages), 1)
                 message = json.loads(messages[0].read_text(encoding="utf-8"))
+                self.assertIn("Failure phase: インスタンス作成\n", message["body"])
                 self.assertIn("PROVISIONING", message["body"])
                 self.assertIn("30m0s", message["body"])
                 self.assertIn("失敗 Work Request を特定できませんでした", message["body"])

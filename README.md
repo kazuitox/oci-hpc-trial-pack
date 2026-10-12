@@ -143,6 +143,8 @@ HPC_OL8
 
 ### 作成失敗の管理者通知
 
+メール冒頭の `Failure phase` は、ログの Ansible 失敗・構築処理の失敗・Terraform エラー対象から「インスタンス作成」「セットアップ」を判定して表示します。根拠がない場合は「判定できませんでした」と表示します。AI による判定は行いません。
+
 Ansible の `FAILED!` / `UNREACHABLE!` を検出したセットアップ失敗では、失敗タスク・ホスト・理由を通知し、OCI Work Request の取得・表示は行いません。インスタンス作成失敗や原因を判定できない失敗では、従来どおり OCI Work Request の診断を付けます。
 
 Cluster Network の作成がタイムアウトした場合は、親の Work Request に加え、Cluster Network の詳細に含まれる所属 Instance Pool の失敗 Work Request も収集します。親が `PROVISIONING` のままでも、Pool 側に記録された `QuotaExceeded` などの原因を通知できます。Pool の所属関係は API の OCID で確認し、同じ表示名の別 Pool は診断対象にしません。Work Request 情報には対象リソース OCID と status も記載します。
