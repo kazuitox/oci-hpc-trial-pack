@@ -41,7 +41,7 @@
 | ID | 守る振る舞い | 参照先・確認方法 |
 | --- | --- | --- |
 | REG-012 | Autoscaling はジョブに応じてクラスターを作成し、アイドル時に削除する。`permanent` とキューの上限を尊重し、通常の cron では途中リサイズを有効化しない。Ubuntu の通常版・軽量版の動的ノード作成では、`fix_ldap` による既存コントローラの SSSD 再起動を行わず、新規計算ノードへの処理を維持する。 | [README](../README.md)、[cron 設定](../playbooks/roles/cron/tasks/el.yml)、[Autoscaling スクリプト](../autoscaling/crontab/autoscale_slurm_disable-resize.sh)、[通常版 playbook](../playbooks/new_nodes.yml)、[軽量版 playbook](../playbooks/lite_new_nodes.yml)。設定検査と、pending ジョブからの作成・実行・アイドル削除を確認する。通常版・軽量版の Ubuntu では複数ノードの並行作成中にコントローラの SSSD 再起動が発生せず、計算ノードで LDAP ユーザーを参照できることも確認する。 |
-| REG-013 | 初期ノードと動的作成ノードへ必要な設定が渡る。SIMPLE / ADVANCED の表示を変えても必要な入力や既定値を失わない。 | [schema.yaml](../schema.yaml)、[inventory.tpl](../inventory.tpl)、[変数生成テンプレート](../conf/variables.tpl)、[動的ノード inventory](../autoscaling/tf_init/inventory.tpl)。REG-001 / REG-006 / REG-016 で確認する一部以外は、生成結果と構築結果を確認する。 |
+| REG-013 | 初期ノードと動的作成ノードへ必要な設定が渡る。SIMPLE / ADVANCED の表示を変えても必要な入力や既定値を失わない。OL8 のインポート URL と表示名は locals・変数・schema で v1.4 に揃える。 | [schema.yaml](../schema.yaml)、[inventory.tpl](../inventory.tpl)、[変数生成テンプレート](../conf/variables.tpl)、[動的ノード inventory](../autoscaling/tf_init/inventory.tpl)。REG-001 / REG-006 / REG-016 で確認する一部以外は、生成結果と構築結果を確認する。 |
 | REG-014 | VNC / DCV と GPU の設定を区別し、旧 `ood_vnc_use_gpu=true` の互換動作を維持する。各ジョブを適切なパーティションへ投入する。 | [README](../README.md)、[locals.tf](../locals.tf)、[Open OnDemand role](../playbooks/roles/openondemand)。旧設定と新設定の CPU / GPU・DCV 有効 / 無効の組合せを確認する。 |
 | REG-015 | Definedタグ`hpc-cost.User`はホームリージョンでデプロイ先コンパートメントへ作成する。課金タグ・IAM 自動作成・Slurm 通知のいずれかが有効な場合だけ tenancy / home region 参照を行う。IAM 自動作成と通知が無効の場合、それらのポリシーや動的グループは作成しない。 | [data.tf](../data.tf)、[locals.tf](../locals.tf)、[iam.tf](../iam.tf)、[cost-tags.tf](../cost-tags.tf)。`cost_tags_enabled` は定義作成と初期付与を制御し、`slurm_user_tags_enabled` は更新だけを制御する。各フラグの組合せで参照と生成されるリソースを確認する。既存定義の state アドレス移行と削除保護も確認する。 |
 
@@ -51,7 +51,7 @@
 
 | 対象 ID | 手順と期待結果 |
 | --- | --- |
-| REG-001 / REG-013 | Resource Manager の SIMPLE / ADVANCED を切り替え、対象 Shape の入力を確認する。初期ノードと Autoscaling ノードで、指定した CPU・メモリ・関連設定が反映される。 |
+| REG-001 / REG-013 | Resource Manager の SIMPLE / ADVANCED を切り替え、対象 Shape の入力を確認する。初期ノードと Autoscaling ノードで、指定した CPU・メモリ・関連設定が反映される。OL8 のインポートでは v1.4 が登録され、初期・動的ノードがその OCID を使用することを確認する。SIMPLE の事前構成済みイメージ使用時は controller も確認する。既存スタックは保存済み入力値と Plan の置換対象を確認する。 |
 | REG-002 | 対象ノードの一時 Block Volume のアタッチ・マウントと削除を確認する。共有領域や対象外 Volume が残り、部分失敗時の記録から後始末を再開できる。 |
 | REG-003 / REG-004 / REG-010 | 通知有効・無効、登録済み・未登録のユーザーでジョブを投入する。選択したイベントだけが意図した宛先へ届き、送信失敗がジョブ進行を妨げない。HA 変更時はバックアップ側のレジストリ同期も確認する。 |
 | REG-005 / REG-006 | 通常更新で後始末が発火しないことを確認する。スタック削除の検証では、動的に作成された対象 Topic が削除され、対象外・保護対象 Topic が後始末処理から除外される。 |

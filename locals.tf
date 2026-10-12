@@ -1,8 +1,8 @@
 locals {
   simple_compute_images = {
     OracleLinux8 = {
-      source_uri               = "https://objectstorage.ap-tokyo-1.oraclecloud.com/p/AqQaLtfNavruHeb0f0DEDzhIG1WONrMWHAxAYtyDROmT-Z7mx8xxebIwJedxTeSh/n/idqcucnenh88/b/kazuito-bucket/o/Oracle-Linux-8.10-2025.07.21-0-OCA-RHCK-OFED-24.10-3.2.5.0-2025.08.21-0_oci-hpc-v2.10-compute-image-v1.3"
-      display_name             = "Oracle-Linux-8.10-2025.07.21-0-OCA-RHCK-OFED-24.10-3.2.5.0-2025.08.21-0_oci-hpc-v2.10-compute-image-v1.3"
+      source_uri               = "https://objectstorage.ap-tokyo-1.oraclecloud.com/p/XcTz0TtXouNdAiCfiSn9n40h697n6tGfzDtLsbBHJythaRzde8M4t56zjjYSGu03/n/idqcucnenh88/b/kazuito-bucket/o/Oracle-Linux-8.10-2025.07.21-0-OCA-RHCK-OFED-24.10-3.2.5.0-2025.08.21-0_oci-hpc-v2.10-compute-image-v1.4"
+      display_name             = "Oracle-Linux-8.10-2025.07.21-0-OCA-RHCK-OFED-24.10-3.2.5.0-2025.08.21-0_oci-hpc-v2.10-compute-image-v1.4"
       operating_system         = "Oracle Linux"
       operating_system_version = "8.10"
       username                 = "opc"

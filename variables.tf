@@ -91,11 +91,11 @@ variable "import_compute_image_from_object_storage" {
 }
 variable "compute_image_source_uri" {
   type    = string
-  default = "https://objectstorage.ap-tokyo-1.oraclecloud.com/p/AqQaLtfNavruHeb0f0DEDzhIG1WONrMWHAxAYtyDROmT-Z7mx8xxebIwJedxTeSh/n/idqcucnenh88/b/kazuito-bucket/o/Oracle-Linux-8.10-2025.07.21-0-OCA-RHCK-OFED-24.10-3.2.5.0-2025.08.21-0_oci-hpc-v2.10-compute-image-v1.3"
+  default = "https://objectstorage.ap-tokyo-1.oraclecloud.com/p/XcTz0TtXouNdAiCfiSn9n40h697n6tGfzDtLsbBHJythaRzde8M4t56zjjYSGu03/n/idqcucnenh88/b/kazuito-bucket/o/Oracle-Linux-8.10-2025.07.21-0-OCA-RHCK-OFED-24.10-3.2.5.0-2025.08.21-0_oci-hpc-v2.10-compute-image-v1.4"
 }
 variable "compute_image_display_name" {
   type    = string
-  default = "Oracle-Linux-8.10-2025.07.21-0-OCA-RHCK-OFED-24.10-3.2.5.0-2025.08.21-0_oci-hpc-v2.10-compute-image-v1.3"
+  default = "Oracle-Linux-8.10-2025.07.21-0-OCA-RHCK-OFED-24.10-3.2.5.0-2025.08.21-0_oci-hpc-v2.10-compute-image-v1.4"
 }
 variable "compute_image_operating_system" {
   type    = string

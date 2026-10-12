@@ -101,6 +101,10 @@ allow dynamic-group autoscaling_dg to manage all-resources in tenancy
 
 デフォルトでは、コントローラと Login Node は Marketplace の `HPC_OL8` を使用します。計算ノードは、デフォルトで Object Storage URI から Oracle Linux 8.10 ベースのカスタムイメージを登録して使用する設定です。
 
+OL8 のインポート用 Custom Image の既定値は `oci-hpc-v2.10-compute-image-v1.4` です。SIMPLE モードで事前構成済みイメージを使用する場合と、ADVANCED モードのインポート URL・表示名に適用します。SIMPLE モードでは、このイメージを controller にも使用します。Trial Pack 本体とは別のバージョン番号です。
+
+既存の Resource Manager スタックでは構成 ZIP を更新してください。ADVANCED モードで保存済みの `compute_image_source_uri` と `compute_image_display_name` が v1.3 の場合は、v1.4 の値へ変更してください。URL は `variables.tf` の既定値を参照してください。既存スタックのイメージ変更は、登録済みイメージやノードの置換につながる可能性があるため、Plan で対象を確認してから Apply してください。構成ファイルの更新だけでは、稼働中のノードのイメージは更新されません。
+
 
 ```text
 HPC_OL8
