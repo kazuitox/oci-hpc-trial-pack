@@ -162,6 +162,11 @@ locals {
     "Any {%s}",
     join(", ", [for instance_id in local.slurm_notification_controller_instance_ids : "instance.id = '${instance_id}'"]),
   )
+  autoscaling_failure_admin_email = var.autoscaling_failure_notifications_enabled ? regex(
+    "^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,63}$",
+    trimspace(var.autoscaling_failure_admin_email),
+  ) : trimspace(var.autoscaling_failure_admin_email)
+  autoscaling_failure_topic_id = var.autoscaling_failure_notifications_enabled ? oci_ons_notification_topic.autoscaling_failure[0].id : ""
 
   controller_image = local.use_imported_compute_image_for_controller ? local.image_ocid : (
     local.effective_use_marketplace_image_controller ? oci_core_app_catalog_subscription.controller_mp_image_subscription[0].listing_resource_id : local.custom_controller_image_ocid

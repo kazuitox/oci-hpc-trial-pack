@@ -32,6 +32,7 @@
 | REG-026 | 内蔵 NVMe を安全に選別し、2台の冗長 LVM は RAID1、4台以上の偶数台は RAID10 とする。既存 LV は再利用しサイズ・形式を変更しない。XFS 作成とマウントは Ansible モジュールで行う。Autoscaling compute の失敗は記録して続行し、その他のホストは失敗させる。 | [選別・容量計算](../playbooks/roles/localdisk/tests/test_layout.py)、[実ツールによる署名検査](../playbooks/roles/localdisk/tests/test_probe_tools.py)、[タスクとLVMモジュール](../playbooks/roles/localdisk/tests/test_task_contract.py)。実 NVMe と OCI は使用しない。blkid / parted 不在時は実ツール検査をスキップする。 |
 | REG-027 | OpenComposer History は既存列と Slurm の Start / End / Elapsed / CPUTime を表示する。Start / End は Submission Time と同じ空白区切りの日時形式とし、Unknown・空欄は保持する。Refresh は適用中の条件を維持して結果領域だけを更新し、エラー時は元の表を残す。再更新後も行選択・最新状態でのバッチ操作を維持する。管理ビューを role 再実行で配布し、変更時に Passenger 再起動を要求する。 | [test_opencomposer_history.py](../tests/test_opencomposer_history.py)：設定・配布経路、Ruby ERB レンダリング、JavaScript の成功・空一覧・失敗・再更新・選択処理の実行。実 Slurm / OOD は含まない。 |
 | REG-028 | 初期構築・通常版・軽量版の新規計算ノードで、controller と同じスタック変数 `timezone` を Slurm 構成前に適用する。HA controller の変数生成経路も保持し、`Asia/Tokyo` に固定しない。 | [test_autoscaling_timezone.py](../tests/test_autoscaling_timezone.py)：YAML の適用対象・権限・実行順、Terraform の値受け渡し、inventory の timezone 行と role の Jinja2 レンダリング。OCI や実 OS の timezone 変更は含まない。 |
+| REG-029 | Autoscaling の作成失敗時、削除前に原因を保存して専用 Topic から管理者へ通知する。Ansible の失敗 task / host と、特定できた失敗 Work Request の error / log を優先し、取得できない場合も既存ログを示す。送信失敗は後始末を止めず再試行し、無効時は通知用権限・送信を要求しない。Slurm ジョブ通知の宛先とリソースは分離する。メール冒頭にログの根拠から失敗フェーズを表示し、根拠不明の場合は判定不能とする。Ansible の FAILED / UNREACHABLE または構築処理の失敗と特定したセットアップ失敗では、Work Request の情報取得・表示を行わない。 | [test_autoscaling_failure_notification.py](../tests/test_autoscaling_failure_notification.py)：診断抽出、Work Request の絞り込み、再送、設定経路。Python 3.6 相当の subprocess 引数制約で、OCI 情報取得・送信、情報取得失敗時のタイムアウト原因保存と送信失敗後の再送を確認。制限された PATH でユーザー配置の CLI スタブによる情報取得・送信・再送、システム配置の探索、Terraform 接頭辞・複数行・重複出力と情報取得エラーの診断を確認。Cluster Network の親が処理中でも所属 Pool の FAILED / QuotaExceeded をメールに含める経路を、state 有無・取得失敗・同名候補の曖昧さ・旧 Work Request の除外を含めてモックで確認。OCI 上のメール配信・権限・Work Request の実形式は別途確認。 |
 
 ## 自動検証が未整備の振る舞い
 
@@ -72,6 +73,7 @@
 REG-027 は OOD の History で未開始・実行中・完了・失敗ジョブの4項目を `sacct` と照合する。CPU Time は CPUTime と一致することを確認する。検索・並び順・ページを適用して Refresh を繰り返し、ページや検索入力を保持したまま状態・詳細・件数が更新されること、行の選択・全選択・Cancel Job / Delete Info・空一覧からの再更新が動作することを確認する。通信失敗・認証期限切れ・Slurm エラー時は元の表を保持すること、role 再実行後も同じ表示になることを確認する。
 
 REG-022 の実環境確認は[調査・更新手順](autoscaling-topology-identity.md#ローカル検証と実環境確認を分ける)を参照する。標準版・軽量版、ラック対応、到達不能ノード回収、HA 同期で対象の一覧だけが更新されることを確認する。
+| REG-029 | 通知の有効・無効と Slurm ジョブ通知の有効・無効を組み合わせ、専用 Topic / Subscription と必要な IAM だけが作成されることを Plan で確認する。Subscription 承認後、Instance Pool・Cluster Network・Compute Cluster の各作成失敗と Ansible 失敗で、削除前の原因、Work Request ID / error（取得可能な場合）、メールの到着、再送と後始末の継続を確認する。`-DEBUG`、Work Request 不在、通知無効、送信失敗も確認する。 |
 
 ## 台帳の更新方法
 

@@ -254,6 +254,11 @@ variableGroups:
   - ${slurm_job_notifications_enabled}
   - ${slurm_notification_admin_email}
   visible: ${slurm}
+- title: Autoscaling 作成失敗メール通知
+  variables:
+  - ${autoscaling_failure_notifications_enabled}
+  - ${autoscaling_failure_admin_email}
+  visible: ${autoscaling}
 - title: ソフトウェア
   variables:
   - ${privilege_sudo}
@@ -1906,6 +1911,21 @@ variables:
     title: Slurm ジョブメール通知を有効化
     default: false
     description: OCI Notifications を使用して、Slurm ジョブの開始・終了・失敗をメールで通知できるようにします。Controller 専用の Dynamic Group と IAM Policy、初期ユーザー用 Topic と Subscription を作成します。slurm=true が必要です。初回デプロイ時に選択してください。既存スタックで true から false への変更はユーザー用通知リソースの終了処理となり、同じスタックでの再有効化は対象外です。通知を有効にしたまま region または targetCompartment を変更する移設も対象外です。
+  autoscaling_failure_notifications_enabled:
+    type: boolean
+    title: 計算ノードの作成失敗を管理者へ通知
+    default: false
+    description: Autoscaling の作成失敗時、後始末の前に専用 Topic から管理者へメールを送ります。Slurm ジョブ通知とは独立しています。
+    visible: ${autoscaling}
+  autoscaling_failure_admin_email:
+    type: string
+    title: 作成失敗通知の管理者メールアドレス
+    description: OCI Notifications から届く Subscription 確認メールを承認してください。
+    default: ''
+    maxLength: 254
+    pattern: '^(|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63})$'
+    required: true
+    visible: ${autoscaling_failure_notifications_enabled}
   slurm_notification_admin_email:
     type: string
     title: 管理者メールアドレス

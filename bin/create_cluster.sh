@@ -168,9 +168,13 @@ do
   fi
 
   echo `date -u '+%Y%m%d%H%M'` >> $logs_folder/create_$2_${date}.log 2>&1
-  terraform init >> $logs_folder/create_$2_${date}.log 2>&1
-  terraform apply -auto-approve -parallelism 1 >> $logs_folder/create_$2_${date}.log 2>&1
-  status=$?
+  if terraform init >> $logs_folder/create_$2_${date}.log 2>&1
+  then
+    terraform apply -auto-approve -parallelism 1 >> $logs_folder/create_$2_${date}.log 2>&1
+    status=$?
+  else
+    status=$?
+  fi
   end=`date -u +%s`
   end_timestamp=`date -u +'%F %T'`
   runtime=$((end-start))
@@ -232,6 +236,20 @@ done
 
 if [ $status -ne 0 ]
 then
+  if [ "$compute_cluster" = "true" ]; then
+    failure_mode=compute
+  elif [ "$cluster_network" = "true" ]; then
+    failure_mode=network
+  else
+    failure_mode=pool
+  fi
+  # Queue and attempt details are saved before FORCE cleanup removes the workspace.
+  python3 "$folder/autoscaling_failure_notify.py" report \
+    --cluster "$2" --queue "$4" --instance-type "$3" --nodes "$1" \
+    --job-id "${5-}" --mode "$failure_mode" --started "$start" \
+    --log "$logs_folder/create_$2_${date}.log" --workspace "$autoscaling_folder/clusters/$2" \
+    >> "$logs_folder/create_$2_${date}.log" 2>&1 || \
+    echo "Failed to queue autoscaling failure notification" >> "$logs_folder/create_$2_${date}.log"
   if [ $debug -eq 0 ]
   then
     $folder/delete_cluster.sh $2 FORCE
