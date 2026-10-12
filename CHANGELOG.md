@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.4.4] - 2026-10-12
+
 ### Fixed
 
 - Autoscaling 作成失敗通知だけを有効にした構成で、通知用 Dynamic Group をデプロイ先リージョンに作成しようとして `403-NotAllowed` になる不具合を修正しました。通知が有効な場合もホームリージョンを取得し、Dynamic Group と IAM Policy をそこに作成します。Topic と EMAIL Subscription の作成先は変更しません。
@@ -27,6 +29,10 @@
 ### Changed
 
 - OL8 のインポート用 Custom Image の既定 URL と表示名を v1.3 から v1.4 に更新しました。SIMPLE / ADVANCED と Resource Manager の既定値を揃えています。既存スタックでは構成 ZIP と保存済み入力値を確認し、Plan でイメージ・ノードの置換対象を確認してください。
+
+### Compatibility / 検証
+
+- Ubuntu のデプロイエラー修正後、利用者から現状の動作確認完了報告を受けています。構成・個別シナリオの内訳は未確認です。通知の初期設定は無効のまま維持し、既存環境の更新方法とローカル検証の範囲は [v1.4.4 リリースノート](docs/releases/v1.4.4.md)に記載しています。
 
 ## [v1.4.1] - 2026-10-11
 
