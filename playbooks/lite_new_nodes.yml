@@ -7,6 +7,7 @@
     destroy: false
   gather_facts: true
   roles: 
+    - timezone
     - ssh
     - firewall
     - privilege_group

@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- 軽量版の Autoscaling 用 playbook でも timezone ロールを実行し、新規計算ノードに controller と同じ `timezone` 設定を適用するよう修正しました。既存環境は controller 上の playbook 更新が必要です。稼働中の計算ノードには自動適用されません。
+
 ## [v1.4.1] - 2026-10-11
 
 ### Fixed
