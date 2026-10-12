@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- OL8 のインポート用 Custom Image の既定 URL と表示名を v1.3 から v1.4 に更新しました。SIMPLE / ADVANCED と Resource Manager の既定値を揃えています。既存スタックでは構成 ZIP と保存済み入力値を確認し、Plan でイメージ・ノードの置換対象を確認してください。
+
 ## [v1.4.1] - 2026-10-11
 
 ### Fixed
