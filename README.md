@@ -143,6 +143,8 @@ Autoscaling は「ジョブごとにクラスターを作成する」方式で�
 
 Ubuntu の通常版・軽量版の動的ノード作成時、LDAP クライアントサービスの再起動は新規計算ノードで行い、既存コントローラでは行いません。初期構築時の設定は変更しません。
 
+Autoscaling の計算ノードには、通常版・軽量版とも controller と同じスタック変数 `timezone`（既定値 `Asia/Tokyo`）を適用します。controller の OS 上で手動変更した timezone を自動取得する仕組みではありません。既存環境の軽量版では、controller 上の `/opt/oci-hpc/playbooks/lite_new_nodes.yml` と、実際に実行される `/opt/oci-hpc/playbooks/new_nodes.yml` に修正版を反映してください。以後に作成する計算ノードから適用され、稼働中ノードの timezone は自動では変わりません。
+
 既存クラスターのノード数を途中で増減する運用は、非推奨で現状対象外です。現行の cron タスクも、既存クラスターのノード数を変更せず、クラスター単位の作成・削除を行うスクリプトを有効化します。
 
 Autoscaling の設定ファイルはコントローラ上の次のパスに配置されます。

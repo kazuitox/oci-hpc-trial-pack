@@ -31,6 +31,7 @@
 | REG-025 | Ubuntu 24.04 の bc_desktop は Xfce の初期設定を含むスクリプト全体を専用 D-Bus 内で実行し、SESSION_MANAGER を継承しない。SAFE_PATH・他のデスクトップの source 方式を保持し、終了コードを返す。依存不足は127で停止する。Ubuntu VNC ノードのみ依存パッケージを導入し、OL8 は変更しない。 | [test_bc_desktop_session.py](../tests/test_bc_desktop_session.py)：Ruby ERB レンダリングと bash -n、D-Bus スタブと実 Bash による初期設定の分離・SAFE_PATH・終了コード0/1/42/143・SIGTERM・source・依存不足、配布条件と初期／動的ノードの role 呼び出しの静的検査。実 D-Bus・Xfce・Slurm は使用しない。 |
 | REG-026 | 内蔵 NVMe を安全に選別し、2台の冗長 LVM は RAID1、4台以上の偶数台は RAID10 とする。既存 LV は再利用しサイズ・形式を変更しない。XFS 作成とマウントは Ansible モジュールで行う。Autoscaling compute の失敗は記録して続行し、その他のホストは失敗させる。 | [選別・容量計算](../playbooks/roles/localdisk/tests/test_layout.py)、[実ツールによる署名検査](../playbooks/roles/localdisk/tests/test_probe_tools.py)、[タスクとLVMモジュール](../playbooks/roles/localdisk/tests/test_task_contract.py)。実 NVMe と OCI は使用しない。blkid / parted 不在時は実ツール検査をスキップする。 |
 | REG-027 | OpenComposer History は既存列と Slurm の Start / End / Elapsed / CPUTime を表示する。Start / End は Submission Time と同じ空白区切りの日時形式とし、Unknown・空欄は保持する。Refresh は適用中の条件を維持して結果領域だけを更新し、エラー時は元の表を残す。再更新後も行選択・最新状態でのバッチ操作を維持する。管理ビューを role 再実行で配布し、変更時に Passenger 再起動を要求する。 | [test_opencomposer_history.py](../tests/test_opencomposer_history.py)：設定・配布経路、Ruby ERB レンダリング、JavaScript の成功・空一覧・失敗・再更新・選択処理の実行。実 Slurm / OOD は含まない。 |
+| REG-028 | 初期構築・通常版・軽量版の新規計算ノードで、controller と同じスタック変数 `timezone` を Slurm 構成前に適用する。HA controller の変数生成経路も保持し、`Asia/Tokyo` に固定しない。 | [test_autoscaling_timezone.py](../tests/test_autoscaling_timezone.py)：YAML の適用対象・権限・実行順、Terraform の値受け渡し、inventory の timezone 行と role の Jinja2 レンダリング。OCI や実 OS の timezone 変更は含まない。 |
 
 ## 自動検証が未整備の振る舞い
 
@@ -55,6 +56,7 @@
 | REG-005 / REG-006 | 通常更新で後始末が発火しないことを確認する。スタック削除の検証では、動的に作成された対象 Topic が削除され、対象外・保護対象 Topic が後始末処理から除外される。 |
 | REG-007 / REG-008 / REG-009 / REG-011 / REG-024 | [4.2.5 更新手順](openondemand-4.2.5-upgrade.md)に従い、4.0 系からの更新・再実行・認証と秘密値保持を確認する。OOD にログインし、メニュー・History・ヘッダー・CPU 表示を確認する。トップ画面・ヘッダー・All Apps に標準のジョブ投入・Active Jobs・Project Manager・Module Browser と空になった親メニューが表示されず、他の項目がある親メニューは残り、OpenComposer の Slurmジョブ・History とファイル・シェル・デスクトップ・対話型セッションが利用できることを、DCV 有効／無効と role 再実行後に確認する。変更した実行プロファイルで生成スクリプトを確認し、小規模ジョブの完了を確認する。VM (TCP)・BM Standard (TCP) の Intel MPI で `MPI_OPTIONS` に `-genv I_MPI_COLL_EXTERNAL 0` が含まれることも確認する。 |
 | REG-012 | ジョブの constraint / partition に合うクラスターが作成されること、アイドル削除、permanent の保持、設定上限の適用を確認する。 |
+| REG-028 | Oracle Linux 8 / Ubuntu の通常版・軽量版で新規 Autoscaling ノードを作成し、controller と各計算ノードの `timedatectl show --property=Timezone --value` がスタックの `timezone` 値と一致することを確認する。`Asia/Tokyo` 以外でも確認する。既存ノードには自動適用されず、更新後の新規ノードで反映されることを確認する。 |
 | REG-025 | [Ubuntu VNC の確認手順](openondemand-4.2.5-upgrade.md#ubuntu-2404-の-vnc-デスクトップ)に従い、新規ジョブのブラウザー接続、同一ユーザーの複数セッション、ログアウトと異常終了時の Slurm 状態を確認する。OL8 に修正版テンプレートが配布されないことも確認する。 |
 | REG-014 | 変更した CPU / GPU・VNC / DCV の組合せでデスクトップジョブを投入し、所定のキュー、ノード構成、ブラウザー接続を確認する。旧設定を使う更新でも互換動作が保たれる。 |
 | REG-015 | 対象となる IAM / 通知設定の組合せで Terraform の参照と権限要求を確認する。タグ定義に必要な参照と、それ以外の機能に由来する参照を区別する。 |
