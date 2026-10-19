@@ -1,0 +1,31 @@
+<%- if Configuration.download_enabled? -%>
+<button id="ood-direct-download-btn" type="button" disabled class="btn btn-primary btn-sm">
+  <i class="fas fa-download" aria-hidden="true"></i> Download（ZIPなし）
+</button>
+<button id="download-btn" type="button" class="btn btn-outline-primary btn-sm" title="フォルダはZIPで保存します">
+  従来のDownload（フォルダはZIP）
+</button>
+<dialog id="ood-direct-download-dialog" class="text-start p-4 shadow" style="width: min(28rem, calc(100vw - 2rem)); border: 0; border-radius: 0.5rem;" aria-labelledby="ood-direct-download-dialog-title">
+  <form id="ood-direct-download-name-form" method="dialog">
+    <h2 id="ood-direct-download-dialog-title" class="h5">ZIPなしダウンロード</h2>
+    <div id="ood-direct-download-spinner" class="text-center py-3">
+      <span class="spinner-border text-primary" aria-hidden="true"></span>
+      <span class="visually-hidden">処理中</span>
+    </div>
+    <p id="ood-direct-download-summary" class="small fw-semibold" role="status" aria-live="polite">合計サイズを計算中…</p>
+    <fieldset id="ood-direct-download-name-fields" hidden>
+    <label for="ood-direct-download-name" class="form-label">フォルダ名</label>
+    <input id="ood-direct-download-name" type="text" value="download" class="form-control" required aria-describedby="ood-direct-download-name-error">
+    </fieldset>
+    <p id="ood-direct-download-progress" class="small" style="overflow-wrap: anywhere;" role="status" aria-live="polite"></p>
+    <p id="ood-direct-download-name-error" class="small text-danger mt-2" role="alert"></p>
+    <div class="d-flex justify-content-end gap-2 mt-3">
+      <button id="ood-direct-download-name-submit" type="submit" class="btn btn-primary" hidden disabled>保存先を選択</button>
+      <button id="ood-direct-download-name-cancel" type="button" class="btn btn-outline-secondary">キャンセル</button>
+      <button id="ood-direct-download-close" type="button" class="btn btn-primary" hidden>閉じる</button>
+    </div>
+  </form>
+</dialog>
+<div id="ood-direct-download-status" class="order-last text-start" style="flex: 0 0 100%; min-width: 0; min-height: 1.5em; overflow-wrap: anywhere;" role="status" aria-live="polite">ZIPなし保存を読み込み中…</div>
+<script src="<%= File.join(@user_configuration.public_url, 'files-direct-download.js') + '?v=9' %>" nonce="<%= content_security_policy_nonce %>"></script>
+<%- end -%>
