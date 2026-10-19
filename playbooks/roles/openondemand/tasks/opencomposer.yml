@@ -94,7 +94,7 @@
     mode: "0644"
   register: ood_opencomposer_manifest
 
-- name: OpenComposer | Install the managed History view and refresh script
+- name: OpenComposer | Install the managed History UI and Slurm backend
   ansible.builtin.copy:
     src: "opencomposer/{{ item.src }}"
     dest: "{{ ood_opencomposer_install_dir }}/{{ item.dest }}"
@@ -104,8 +104,19 @@
   loop:
     - { src: history.erb, dest: views/history.erb }
     - { src: history-refresh.js, dest: public/history-refresh.js }
+    - { src: history.rb, dest: lib/history.rb }
+    - { src: slurm.rb, dest: lib/schedulers/slurm.rb }
+    - { src: history.js, dest: public/history.js }
     - { src: LICENSE, dest: LICENSE }
   register: ood_opencomposer_history_ui
+
+- name: OpenComposer | Register the canceled job status
+  ansible.builtin.lineinfile:
+    path: "{{ ood_opencomposer_install_dir }}/run.rb"
+    regexp: '^JOB_STATUS\s+\|\|='
+    line: 'JOB_STATUS             ||= { "queued" => "QUEUED", "running" => "RUNNING", "completed" => "COMPLETED", "failed" => "FAILED", "canceled" => "CANCELED" }'
+    backrefs: true
+  register: ood_opencomposer_canceled_status
 
 - name: OpenComposer | Verify the app in the Open OnDemand Ruby environment
   ansible.builtin.command:
@@ -176,6 +187,7 @@
     or ood_opencomposer_history_manifest.changed
     or ood_opencomposer_permissions.changed
     or ood_opencomposer_history_ui.changed
+    or ood_opencomposer_canceled_status.changed
     or ood_opencomposer_config.changed
     or ood_opencomposer_manifest.changed
     or ood_opencomposer_form.changed

@@ -39,9 +39,13 @@ class OpenComposerHistoryTests(unittest.TestCase):
         self.assertEqual(task['loop'], [
             {'src': 'history.erb', 'dest': 'views/history.erb'},
             {'src': 'history-refresh.js', 'dest': 'public/history-refresh.js'},
+            {'src': 'history.rb', 'dest': 'lib/history.rb'},
+            {'src': 'slurm.rb', 'dest': 'lib/schedulers/slurm.rb'},
+            {'src': 'history.js', 'dest': 'public/history.js'},
             {'src': 'LICENSE', 'dest': 'LICENSE'}])
         self.assertEqual(task['ansible.builtin.copy']['mode'], '0644')
-        self.assertIn('Verify the app', tasks[index + 1]['name'])
+        self.assertIn('Register the canceled', tasks[index + 1]['name'])
+        self.assertIn('Verify the app', tasks[index + 2]['name'])
         self.assertIn('ood_opencomposer_history_ui.changed', tasks[-1]['when'])
         self.assertIn('Copyright (c) 2024 RIKEN R-CCS', (UI / 'LICENSE').read_text())
 
@@ -57,7 +61,7 @@ JOB_KEYS='keys'; HEADER_SCRIPT_LOCATION='location'; HEADER_SCRIPT_NAME='script'
 HISTORY_KEY_MAP={}
 @conf={'description_color'=>'#123456'}; @detail_open='false'; @filter=''
 @filter_mode='and'; @filter_column_items=[]; @date_range_items=[]; @date_range='all'
-@statuses=['running']; @script_name='/pun/sys/OpenComposer'; @apps_dir='/apps'
+@statuses=['running', 'canceled']; @script_name='/pun/sys/OpenComposer'; @apps_dir='/apps'
 @my_ood_url=''; @login_node=nil; @rows=10; @current_page=1; @page_size=1
 @start_index=0; @end_index=0; @history_search_elapsed_label='0.001'
 @history_hash={JOB_SUBMISSION_TIME=>'Submission Time', 'Start'=>'Start Time', 'End'=>'End Time', 'Elapsed'=>'Elapsed Time', 'CPUTime'=>'CPU Time'}
@@ -104,6 +108,8 @@ puts ERB.new(File.read(ARGV[0])).result(binding)
             html = result.stdout
             self.assertIn('id="_historyRefresh"', html)
             self.assertIn('id="_historyResults"', html)
+            self.assertIn('value="canceled" checked', html)
+            self.assertIn('for="_historyStatusCanceled">Canceled</label>', html)
             self.assertLess(html.index('</div>\n<script src="./history.js">'),
                             html.index('history-refresh.js'))
             if state != 'empty':
