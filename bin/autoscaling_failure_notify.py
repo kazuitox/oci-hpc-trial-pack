@@ -43,6 +43,13 @@ def oci_executable():
     return "oci"  # Let the existing error handling report a missing installation.
 
 
+def oci_environment():
+    # Click on Python 3.6 refuses an ASCII locale, including in cron jobs.
+    env = os.environ.copy()
+    env.update(LC_ALL="C.UTF-8", LANG="C.UTF-8")
+    return env
+
+
 def oci_json(config, *args):
     command = [oci_executable(), *args, "--region", config["region"],
                "--max-retries", "0", "--connection-timeout", "5", "--read-timeout", "12"]
@@ -50,7 +57,8 @@ def oci_json(config, *args):
         command += ["--auth", "instance_principal"]
     try:
         result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                universal_newlines=True, timeout=20, check=True)
+                                universal_newlines=True, encoding="utf-8", errors="replace",
+                                timeout=20, check=True, env=oci_environment())
         return json.loads(result.stdout).get("data", [])
     except (OSError, subprocess.SubprocessError, ValueError) as error:
         detail = getattr(error, "stderr", None) or error
@@ -256,7 +264,8 @@ def publish(config, message):
         if config["instance_principal"]:
             command += ["--auth", "instance_principal"]
         subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                universal_newlines=True, timeout=20, check=True)
+                                universal_newlines=True, encoding="utf-8", errors="replace",
+                                timeout=20, check=True, env=oci_environment())
         return True
     except (OSError, subprocess.SubprocessError) as error:
         detail = getattr(error, "stderr", None) or error
