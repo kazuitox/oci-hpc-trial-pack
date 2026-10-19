@@ -110,6 +110,10 @@
             <input class="form-check-input" type="checkbox" name="_historyStatusCompleted" id="_historyStatusCompleted" value="completed" <%= 'checked' if @statuses&.include?('completed') %>>
             <label class="form-check-label" for="_historyStatusCompleted">Completed</label>
           </div>
+          <div class="form-check form-check-inline">
+            <input class="form-check-input" type="checkbox" name="_historyStatusCanceled" id="_historyStatusCanceled" value="canceled" <%= 'checked' if @statuses&.include?('canceled') %>>
+            <label class="form-check-label" for="_historyStatusCanceled">Canceled</label>
+          </div>
           <div class="form-check form-check-inline me-1">
             <input class="form-check-input" type="checkbox" name="_historyStatusFailed" id="_historyStatusFailed" value="failed" <%= 'checked' if @statuses&.include?('failed') %>>
             <label class="form-check-label" for="_historyStatusFailed">Failed</label>

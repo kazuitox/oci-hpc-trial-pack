@@ -589,7 +589,9 @@ OpenComposerのPassengerアプリ設定はデプロイ時に事前生成する�
 
 History の表には、従来の項目に加えて `Start Time`（開始時刻）、`End Time`（終了時刻）、`Elapsed Time`（経過時間）、`CPU Time` を表示します。値は Slurm の `sacct` の `Start` / `End` / `Elapsed` / `CPUTime` を使用します。開始時刻・終了時刻は Submission Time と同じ `YYYY-MM-DD HH:MM:SS` 形式で表示します。`CPU Time` は経過時間と割り当て CPU 数の積で、実際に消費した CPU 時間の合計（`TotalCPU`）とは異なります。未開始・未終了・会計情報未反映の場合は、Slurm が返す値または空欄を表示します。`Refresh` ボタンは現在の検索条件・並び順・ページを維持し、表、ジョブ詳細、件数、ページ切替部分だけを更新します。検索欄への未適用の入力は保持し、更新対象には現在適用中の条件を使います。更新後も残っている行の選択は保持し、キャンセル対象は最新の状態で判定します。更新失敗時は元の表を保持してメッセージを表示します。
 
-既存環境には更新した Open OnDemand role を再適用してください。固定版 OpenComposer の履歴ビューと追加 JavaScript を配布し、変更時に Passenger の再起動を要求します。既存の履歴 DB・ジョブスクリプトは保持します。完了済みジョブは OpenComposer が保存した会計情報を表示するため、保存済みの情報に時間項目がない過去の履歴は空欄のままです。
+新規デプロイでは、History の Status に `Canceled` を追加し、キャンセルと正常終了の `Completed` を区別します。OpenComposer の `Cancel Job` が成功した場合と、Slurm の `sacct` が `CANCELLED`（`CANCELLED by <UID>` を含む）を返した場合に適用します。`Canceled` だけの絞り込みと Status 列での並べ替えにも対応し、キャンセル済みジョブは終了済みとして扱います。過去の履歴を補正する移行処理は含みません。
+
+既存環境には更新した Open OnDemand role を再適用してください。固定版 OpenComposer の履歴ビュー・履歴処理・Slurm バックエンド・JavaScript を配布し、変更時に Passenger の再起動を要求します。既存の履歴 DB・ジョブスクリプトは保持します。完了済みジョブは OpenComposer が保存した会計情報を表示するため、保存済みの情報に時間項目がない過去の履歴は空欄のままです。
 
 OpenComposer v2.0.2 の UI は、ブラウザから jsDelivr、cdnjs、Google Fonts の公開 CDN を参照します。閉域端末や厳格な Content Security Policy で利用する場合は、CDN へのアクセス許可またはアセットのローカル配信が別途必要です。
 
