@@ -33,6 +33,7 @@
 | REG-027 | OpenComposer History は既存列と Slurm の Start / End / Elapsed / CPUTime を表示する。Start / End は Submission Time と同じ空白区切りの日時形式とし、Unknown・空欄は保持する。Refresh は適用中の条件を維持して結果領域だけを更新し、エラー時は元の表を残す。再更新後も行選択・最新状態でのバッチ操作を維持する。管理ビューを role 再実行で配布し、変更時に Passenger 再起動を要求する。 | [test_opencomposer_history.py](../tests/test_opencomposer_history.py)：設定・配布経路、Ruby ERB レンダリング、JavaScript の成功・空一覧・失敗・再更新・選択処理の実行。実 Slurm / OOD は含まない。 |
 | REG-028 | 初期構築・通常版・軽量版の新規計算ノードで、controller と同じスタック変数 `timezone` を Slurm 構成前に適用する。HA controller の変数生成経路も保持し、`Asia/Tokyo` に固定しない。 | [test_autoscaling_timezone.py](../tests/test_autoscaling_timezone.py)：YAML の適用対象・権限・実行順、Terraform の値受け渡し、inventory の timezone 行と role の Jinja2 レンダリング。OCI や実 OS の timezone 変更は含まない。 |
 | REG-029 | Autoscaling の作成失敗時、削除前に原因を保存して専用 Topic から管理者へ通知する。Ansible の失敗 task / host と、特定できた失敗 Work Request の error / log を優先し、取得できない場合も既存ログを示す。送信失敗は後始末を止めず再試行し、無効時は通知用権限・送信を要求しない。Slurm ジョブ通知の宛先とリソースは分離する。作成失敗通知だけが有効でも、Dynamic Group・IAM Policy はホームリージョン、Topic・Subscription はデプロイ先リージョンを使用する。メール冒頭にログの根拠から失敗フェーズを表示し、根拠不明の場合は判定不能とする。Ansible の FAILED / UNREACHABLE または構築処理の失敗と特定したセットアップ失敗では、Work Request の情報取得・表示を行わない。 | [test_autoscaling_failure_notification.py](../tests/test_autoscaling_failure_notification.py)：通知単独有効時も含むホームリージョン取得条件と IAM の provider・有効条件の静的検査、診断抽出、Work Request の絞り込み、再送、設定経路。Python 3.6 相当の subprocess 引数制約で、OCI 情報取得・送信、情報取得失敗時のタイムアウト原因保存と送信失敗後の再送を確認。制限された PATH でユーザー配置の CLI スタブによる情報取得・送信・再送、システム配置の探索、Terraform 接頭辞・複数行・重複出力と情報取得エラーの診断を確認。Cluster Network の親が処理中でも所属 Pool の FAILED / QuotaExceeded をメールに含める経路を、state 有無・取得失敗・同名候補の曖昧さ・旧 Work Request の除外を含めてモックで確認。OCI 上のメール配信・権限・Work Request の実形式は別途確認。 |
+| REG-031 | OOD のアップロード・単一ファイル／フォルダのダウンロードを既定50 GB（10進）に設定する。既存の別設定を保持し、旧ダウンロード環境変数も整合させる。Nginx は multipart 用の余裕を持ち、Apache の容量制限解除は Files 配下に限定する。変更時と反映失敗後の再試行で設定再生成・PUN 再起動を実行する。 | [test_openondemand_file_transfer_limits.py](../tests/test_openondemand_file_transfer_limits.py)：実 Ansible を一時パスとコマンドスタブで実行し、新規設定・旧上限更新・他設定保持・再実行・上限変更・反映失敗からの再試行を確認。portal のレンダリングと両 OS の共有タスク経路も検査する。実 HTTP 転送は含まない。 |
 
 ## 自動検証が未整備の振る舞い
 
@@ -81,3 +82,5 @@ REG-022 の実環境確認は[調査・更新手順](autoscaling-topology-identi
 - 不具合修正時は、守る振る舞いと再発を検出するテストを対応づける。自動化した項目は検証済みの範囲を明記して移動・更新する。
 - 仕様変更で保護条件を変える場合は、理由・互換性への影響を変更説明に残し、実装・テスト・台帳を整合させる。
 - 毎回のテスト結果や環境固有のログは台帳に積み上げず、作業報告や PR に実施日・対象環境・結果・スキップ・未実施を記録する。
+
+REG-031 は Oracle Linux 8 と Ubuntu 24.04 の OOD で、再適用後の設定値と Apache 構文検査、Web プロセス再起動を確認する。10 GiB超・50 GB付近・50 GB超のアップロード、単一ファイルとフォルダのダウンロードを試し、許容／拒否とチェックサムを確認する。一時領域・保存先の空き容量、フォルダ容量集計のタイムアウト、上限超過時の表示も確認する。設定を変えない再実行では上限設定による PUN 再起動が起きないこと、OOD無効時には処理されないことを確認する。実環境確認は未実施。

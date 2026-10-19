@@ -1,0 +1,75 @@
+---
+- name: OpenOnDemand files | Ensure dashboard config directory exists
+  ansible.builtin.file:
+    path: /etc/ood/config/apps/dashboard
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Nginx counts the multipart request body, including its headers/boundaries.
+# Leave 1 MiB for that overhead; the Files UI retains the exact file limit.
+- name: OpenOnDemand files | Configure Nginx upload request limit
+  ansible.builtin.lineinfile:
+    path: /etc/ood/config/nginx_stage.yml
+    regexp: '^nginx_file_upload_max\s*:'
+    line: "nginx_file_upload_max: {{ (ood_file_transfer_max_bytes | int) + 1048576 }}"
+    create: true
+    owner: root
+    group: root
+    mode: "0644"
+  register: ood_file_upload_nginx_config
+
+# Keep unrelated application environment settings. Set the legacy download
+# alias as well because 4.2.5 gives it precedence over OOD_DOWNLOAD_FILE_MAX.
+- name: OpenOnDemand files | Configure upload and download limits
+  ansible.builtin.lineinfile:
+    path: /etc/ood/config/apps/dashboard/env
+    regexp: '^{{ item }}='
+    line: "{{ item }}={{ ood_file_transfer_max_bytes | int }}"
+    create: true
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - FILE_UPLOAD_MAX
+    - OOD_DOWNLOAD_FILE_MAX
+    - OOD_FILE_DOWNLOAD_MAX
+    - OOD_DOWNLOAD_DIR_MAX
+  register: ood_file_transfer_dashboard_env
+
+# Retain a pending marker on failure so an unchanged retry still restarts PUNs.
+- name: OpenOnDemand files | Inspect pending transfer limit activation
+  ansible.builtin.stat:
+    path: /etc/ood/config/.oci-hpc-file-transfer-pending
+  register: ood_file_transfer_pending
+
+- name: OpenOnDemand files | Mark transfer limits pending activation
+  ansible.builtin.copy:
+    dest: /etc/ood/config/.oci-hpc-file-transfer-pending
+    content: "pending\n"
+    owner: root
+    group: root
+    mode: "0644"
+  when: ood_file_upload_nginx_config.changed or ood_file_transfer_dashboard_env.changed
+
+- name: OpenOnDemand files | Regenerate staged app configurations
+  ansible.builtin.command: /opt/ood/nginx_stage/sbin/update_nginx_stage --quiet
+  changed_when: true
+  when: >-
+    ood_file_upload_nginx_config.changed
+    or ood_file_transfer_dashboard_env.changed
+    or ood_file_transfer_pending.stat.exists
+
+- name: OpenOnDemand files | Restart user web processes after limit changes
+  ansible.builtin.command: /opt/ood/nginx_stage/sbin/nginx_stage nginx_clean -f
+  changed_when: true
+  when: >-
+    ood_file_upload_nginx_config.changed
+    or ood_file_transfer_dashboard_env.changed
+    or ood_file_transfer_pending.stat.exists
+
+- name: OpenOnDemand files | Clear successful transfer limit activation
+  ansible.builtin.file:
+    path: /etc/ood/config/.oci-hpc-file-transfer-pending
+    state: absent

@@ -563,6 +563,12 @@ Ubuntu 24.04 の VNC デスクトップでは、Xfce の初期設定と起動を
 
 既存の Ubuntu 環境へ適用する場合は、コントローラへ更新した `playbooks/` を配布して Open OnDemand role を再実行し、VNC 計算ノードで `command -v dbus-run-session` が成功することを確認してください。不足する既存ノードでは `sudo apt-get install dbus-daemon` が必要です。変更は新しく投入するデスクトップジョブに反映されます。実行中・投入済みのジョブの出力ディレクトリにあるスクリプトは更新されません。[Ubuntu VNC の確認手順](docs/openondemand-4.2.5-upgrade.md#ubuntu-2404-の-vnc-デスクトップ)も参照してください。
 
+ファイルのアップロードとダウンロードの上限は **50 GB（50,000,000,000 バイト、約46.6 GiB）** です。ダウンロードは単一ファイルとフォルダの両方が対象です。Ansible の `ood_file_transfer_max_bytes` で変更できます。アップロードは画面のファイル上限に加え、Nginx にリクエストの付加情報用として 1 MiB の余裕を設けます。Apache のリクエスト容量制限は Files の URL 配下だけ解除し、Nginx 側で制限します。[公式の転送上限設定](https://osc.github.io/ood-documentation/latest/customizations.html#set-upload-limits)も参照してください。
+
+既存環境では、更新した `playbooks/roles/openondemand/` 全体をコントローラの `/opt/oci-hpc/playbooks/roles/openondemand/` へ配布し、既存 inventory と変数で `playbooks/openondemand.yml` を再適用してください。Resource Manager の構成 ZIP の更新だけでは、稼働中の OOD に反映されません。上限設定に変更がある場合、ロールはアプリ設定を再生成して全利用者の OOD Web プロセスを再起動するため、転送中の操作を終えた保守時間に適用してください。利用者は画面を開き直します。Slurm ジョブの停止やストレージの拡張は行いません。
+
+実環境での50 GB転送は未検証です。アップロード先と OOD の一時領域に空き容量を確保し、従来の10 GiB上限を超えるファイル、50 GB付近、上限超過を確認してください。ダウンロード後はサイズとチェックサムを照合します。フォルダの容量集計には別途タイムアウトがあるため、上限の変更だけで多数ファイルの転送完了を保証するものではありません。
+
 ブラウザシェルの無操作タイムアウトは30分です。接続の最大継続時間はOpen OnDemandのデフォルトである1時間のままです。
 
 `use_ood`を有効にするとVNC用の`vnc`パーティション（Constraint: `dskv`、instance keyword: `desktop-v`）を作成します。Oracle Linux 8で`ood_dcv_enabled`も有効にすると、DCV専用の`dcv`パーティション（Constraint: `dskd`、instance keyword: `desktop-d`）と「Linux Desktop with Amazon DCV（検証用）」を追加します。VNCジョブは`vnc`、DCVジョブは`dcv`へ投入され、ノード構築時のAnsibleもキュー名に応じてTurboVNCまたはAmazon DCVだけを構成します。

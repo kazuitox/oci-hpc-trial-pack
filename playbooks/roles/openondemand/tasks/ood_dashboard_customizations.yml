@@ -10,6 +10,9 @@
     - apps/dashboard/initializers
     - apps/dashboard/views/widgets
 
+- name: OpenOnDemand files | Configure transfer limits
+  ansible.builtin.include_tasks: file_transfer_limits.yml
+
 - name: OpenOnDemand dashboard | Render dashboard configuration
   ansible.builtin.template:
     src: ondemand.yml.j2
