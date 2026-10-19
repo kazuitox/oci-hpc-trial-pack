@@ -33,6 +33,7 @@
 | REG-027 | OpenComposer History は既存列と Slurm の Start / End / Elapsed / CPUTime を表示する。Start / End は Submission Time と同じ空白区切りの日時形式とし、Unknown・空欄は保持する。Refresh は適用中の条件を維持して結果領域だけを更新し、エラー時は元の表を残す。再更新後も行選択・最新状態でのバッチ操作を維持する。管理ビューを role 再実行で配布し、変更時に Passenger 再起動を要求する。 | [test_opencomposer_history.py](../tests/test_opencomposer_history.py)：設定・配布経路、Ruby ERB レンダリング、JavaScript の成功・空一覧・失敗・再更新・選択処理の実行。実 Slurm / OOD は含まない。 |
 | REG-028 | 初期構築・通常版・軽量版の新規計算ノードで、controller と同じスタック変数 `timezone` を Slurm 構成前に適用する。HA controller の変数生成経路も保持し、`Asia/Tokyo` に固定しない。 | [test_autoscaling_timezone.py](../tests/test_autoscaling_timezone.py)：YAML の適用対象・権限・実行順、Terraform の値受け渡し、inventory の timezone 行と role の Jinja2 レンダリング。OCI や実 OS の timezone 変更は含まない。 |
 | REG-029 | Autoscaling の作成失敗時、削除前に原因を保存して専用 Topic から管理者へ通知する。Ansible の失敗 task / host と、特定できた失敗 Work Request の error / log を優先し、取得できない場合も既存ログを示す。送信失敗は後始末を止めず再試行し、無効時は通知用権限・送信を要求しない。Slurm ジョブ通知の宛先とリソースは分離する。作成失敗通知だけが有効でも、Dynamic Group・IAM Policy はホームリージョン、Topic・Subscription はデプロイ先リージョンを使用する。メール冒頭にログの根拠から失敗フェーズを表示し、根拠不明の場合は判定不能とする。Ansible の FAILED / UNREACHABLE または構築処理の失敗と特定したセットアップ失敗では、Work Request の情報取得・表示を行わない。 | [test_autoscaling_failure_notification.py](../tests/test_autoscaling_failure_notification.py)：通知単独有効時も含むホームリージョン取得条件と IAM の provider・有効条件の静的検査、診断抽出、Work Request の絞り込み、再送、設定経路。Python 3.6 相当の subprocess 引数制約で、OCI 情報取得・送信、情報取得失敗時のタイムアウト原因保存と送信失敗後の再送を確認。制限された PATH でユーザー配置の CLI スタブによる情報取得・送信・再送、システム配置の探索、Terraform 接頭辞・複数行・重複出力と情報取得エラーの診断を確認。Cluster Network の親が処理中でも所属 Pool の FAILED / QuotaExceeded をメールに含める経路を、state 有無・取得失敗・同名候補の曖昧さ・旧 Work Request の除外を含めてモックで確認。OCI 上のメール配信・権限・Work Request の実形式は別途確認。 |
+| REG-031 | OODの容量確認は既定300秒で生成する。ZIPなし保存の標準容量・制限確認は選択した最上位フォルダごとに1回とし、配下は一覧取得とサイズ集計を行う。OOD FilesのZIPなし保存は既存の認証・権限・ダウンロード設定とサイズ制限を利用し、複数ファイル・階層・空フォルダを保って順次保存する。既存ファイルを上書きせず、中断・認証切れ・サイズ不一致を完了と表示しない。リンク・リモート領域・過大な一覧を拒否し、従来の操作も保持する。単一・複数選択とも同じポップアップで容量計算から転送完了まで表示する。計算中は回転するアイコンを表示し名前欄を隠す。計算後に合計サイズ・ファイル数と名前欄を表示し、単一フォルダの初期名は元の名前とし、同名は連番にする。集計中・確認失敗時は保存を開始せず、キャンセルとEscは計算中から転送中まで処理を中止する。進捗はポップアップ内にファイル番号／ファイル総数と平均転送レートを表示し、ファイル名は表示しない。ポップアップを閉じた後やキャンセル後は、結果メッセージと空の表示行を画面に残さない。 | [test_ood_files_direct_download.py](../tests/test_ood_files_direct_download.py)：JavaScriptの保存・失敗・中止・入力拒否の実行、ERBの有効／無効レンダリング、標準の公開URLと実配置先の対応、読み込み前の無効化と一覧初期化エラー表示、単一／複数選択時の命名と階層・同名回避・不正名拒否・ポップアップのキャンセルと確認クリック時の保存先選択、合計サイズと単位・集計中の中断・確認失敗の拒否・確認結果の再利用、ファイル件数・平均レート・長い名前の非表示、各段階での名前欄・アイコン・キャンセルの表示と同一ポップアップの維持、転送キャンセル後の完了表示防止、完了・中止後の画面メッセージと空行の非表示、最上位だけの容量確認・配下の権限拒否・300秒設定の生成と変更、配布と再起動設定の検査。実ブラウザ・OODは含まない。 |
 
 ## 自動検証が未整備の振る舞い
 
@@ -74,6 +75,8 @@ REG-027 は OOD の History で未開始・実行中・完了・失敗ジョブ�
 
 REG-022 の実環境確認は[調査・更新手順](autoscaling-topology-identity.md#ローカル検証と実環境確認を分ける)を参照する。標準版・軽量版、ラック対応、到達不能ノード回収、HA 同期で対象の一覧だけが更新されることを確認する。
 | REG-029 | 通知の有効・無効と Slurm ジョブ通知の有効・無効を組み合わせ、専用 Topic / Subscription と必要な IAM だけが作成されることを Plan で確認する。ホームリージョン以外へのデプロイで、作成失敗通知だけを有効にした場合も Dynamic Group・IAM Policy がホームリージョンに作成され、Topic・Subscription はデプロイ先に作成されることを確認する。4機能すべて無効の場合はホームリージョン参照と通知用 IAM が追加されないことも確認する。Subscription 承認後、Instance Pool・Cluster Network・Compute Cluster の各作成失敗と Ansible 失敗で、削除前の原因、Work Request ID / error（取得可能な場合）、メールの到着、再送と後始末の継続を確認する。`-DEBUG`、Work Request 不在、通知無効、送信失敗も確認する。 |
+
+REG-031の実環境確認は[FilesのZIPなし保存の受入手順](ood-files-download.md#reg-031の受入確認を行う)を参照する。対応ブラウザで内容・階層と中断時の表示を確認し、非対応環境・権限拒否・既存制限・従来の操作も確認する。
 
 ## 台帳の更新方法
 

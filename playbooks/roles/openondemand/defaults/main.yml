@@ -36,6 +36,8 @@ ood_oidc_ssl_validate_server: "On"
 ood_user_map_cmd: /usr/local/sbin/ood-user-map
 ood_host_regex: "(compute|desktop|vnc|dcv)-[\\w-]+"
 ood_shell_inactive_timeout_ms: 1800000
+# Seconds allowed for each selected folder's server-side recursive size check.
+ood_download_dir_timeout_seconds: 300
 
 ood_desktop_use_gpu: false
 ood_vnc_vgl_group: vglusers

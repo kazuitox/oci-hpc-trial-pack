@@ -2,6 +2,9 @@
 ---
 dashboard_title: "OOD CONFIG TEST"
 
+# Applies to the standard directory preflight used by ZIP and direct downloads.
+download_dir_timeout_seconds: {{ ood_download_dir_timeout_seconds | default(300) | int }}
+
 pinned_apps:
   - 'sys/files'
   - 'sys/bc_desktop'

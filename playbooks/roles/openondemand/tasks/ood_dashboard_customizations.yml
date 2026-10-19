@@ -117,6 +117,40 @@
     - system-status/manifest.yml
   register: ood_system_app_overrides
 
+- name: OpenOnDemand Files | Ensure view override directory exists
+  ansible.builtin.file:
+    path: /etc/ood/config/apps/dashboard/views/files
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: OpenOnDemand Files | Install download button override
+  ansible.builtin.copy:
+    src: etc/ood/config/apps/dashboard/views/files/_download_button.html.erb
+    dest: /etc/ood/config/apps/dashboard/views/files/_download_button.html.erb
+    owner: root
+    group: root
+    mode: "0644"
+  register: ood_files_download_view
+
+- name: OpenOnDemand Files | Ensure portal public directory exists
+  ansible.builtin.file:
+    path: /var/www/ood/public
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: OpenOnDemand Files | Install uncompressed download script
+  ansible.builtin.copy:
+    src: files-direct-download.js
+    dest: /var/www/ood/public/files-direct-download.js
+    owner: root
+    group: root
+    mode: "0644"
+  register: ood_files_download_script
+
 - name: OpenOnDemand dashboard | Request a Passenger restart after dashboard changes
   ansible.builtin.file:
     path: /var/www/ood/apps/sys/dashboard/tmp/restart.txt
@@ -125,7 +159,9 @@
     group: root
     mode: "0644"
   when: >-
-    ood_dashboard_configuration.changed
+    ood_files_download_view.changed
+    or ood_files_download_script.changed
+    or ood_dashboard_configuration.changed
     or ood_opencomposer_frame_widget.changed
     or ood_opencomposer_endpoint_widgets.changed
     or ood_system_status_physical_cores.changed
