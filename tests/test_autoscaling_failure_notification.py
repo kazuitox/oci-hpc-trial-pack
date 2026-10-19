@@ -103,6 +103,23 @@ class AutoscalingFailureNotificationTests(unittest.TestCase):
                 notify.retry(config, root)
                 self.assertFalse((root / "attempt.json").exists())
 
+    def test_oci_lookup_and_publish_override_ascii_locale_without_changing_parent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cli = root / 'oci'
+            cli.write_text('#!' + sys.executable + '\n' +
+                'import json, os, sys\n'
+                'assert os.environ["LC_ALL"] == "C.UTF-8"\n'
+                'assert os.environ["LANG"] == "C.UTF-8"\n'
+                'print(json.dumps({"data": [{"message": "計算ノード"}]}, ensure_ascii=False))\n', encoding='utf-8')
+            cli.chmod(0o700)
+            config = {'region': 'test-region', 'instance_principal': True, 'topic_id': 'test-topic', 'spool': str(root)}
+            with mock.patch.dict(os.environ, LC_ALL='C', LANG='C'), mock.patch.object(notify, 'oci_executable', return_value=str(cli)):
+                self.assertEqual(notify.oci_json(config, 'compute', 'instance', 'list'), [{'message': '計算ノード'}])
+                self.assertTrue(notify.publish(config, {'title': '確認', 'body': '通知本文'}))
+                self.assertEqual(os.environ['LC_ALL'], 'C')
+                self.assertEqual(os.environ['LANG'], 'C')
+
     def test_cli_fallback_uses_system_installation_and_preserves_path_precedence(self):
         with mock.patch.object(notify.shutil, "which", return_value=None), \
                 mock.patch.object(notify.Path, "is_file", return_value=True), \
@@ -410,10 +427,10 @@ class AutoscalingFailureNotificationTests(unittest.TestCase):
 
         # Explicit Python 3.6-compatible signature rejects capture_output/text.
         def run36(command, *, stdout=None, stderr=None, universal_newlines=False,
-                  timeout=None, check=False):
+                  timeout=None, check=False, env=None, encoding=None, errors=None):
             return real_run(command, stdout=stdout, stderr=stderr,
                             universal_newlines=universal_newlines,
-                            timeout=timeout, check=check)
+                            timeout=timeout, check=check, env=env, encoding=encoding, errors=errors)
 
         config = {"region": "us-ashburn-1", "instance_principal": False}
         with mock.patch.object(notify.shutil, "which", return_value=sys.executable), \
@@ -437,12 +454,15 @@ class AutoscalingFailureNotificationTests(unittest.TestCase):
             sent = []
 
             def run36(command, *, stdout=None, stderr=None, universal_newlines=False,
-                      timeout=None, check=False):
+                      timeout=None, check=False, env=None, encoding=None, errors=None):
                 self.assertIs(stdout, subprocess.PIPE)
                 self.assertIs(stderr, subprocess.PIPE)
                 self.assertTrue(universal_newlines)
                 self.assertTrue(check)
                 self.assertEqual(timeout, 20)
+                self.assertEqual(env['LC_ALL'], 'C.UTF-8')
+                self.assertEqual(env['LANG'], 'C.UTF-8')
+                self.assertEqual(encoding, 'utf-8')
                 if command[1:4] != ["ons", "message", "publish"]:
                     raise subprocess.CalledProcessError(1, command, stderr="lookup denied")
                 path = Path(command[command.index("--from-json") + 1][7:])

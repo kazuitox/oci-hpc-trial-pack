@@ -133,8 +133,8 @@ HPC_OL8
 | `login_node` | ユーザー用の追加 Login Node を作成します。 |
 | `slurm_ha` | バックアップ Slurm Controller を作成します。 |
 | `slurm_job_notifications_enabled` | OCI Notifications を使った Slurm ジョブメール通知を有効化します。デフォルトは `false`。 |
-| `autoscaling_failure_notifications_enabled` | Autoscaling の計算ノード作成失敗を管理者へメール通知します。デフォルトは `false`。 |
-| `autoscaling_failure_admin_email` | 作成失敗通知専用の EMAIL Subscription の宛先です。Slurm ジョブ通知とは別の Topic / Subscription を使用します。 |
+| `autoscaling_failure_notifications_enabled` | 管理者メール通知を有効化します。計算ノードの作成失敗通知と残存インスタンス監視を同時に有効にし、同じ Topic・宛先へ通知します。Slurm が必要です。既存の変数名を維持し、デフォルトは `false`。 |
+| `autoscaling_failure_admin_email` | 作成失敗・残存監視で共用する管理者向け EMAIL Subscription の宛先です。Slurm ジョブ通知とは別の Topic / Subscription を使用します。 |
 | `slurm_notification_admin_email` | ローカル Controller ユーザー（通常は `opc`）のジョブ通知先メールアドレス。 |
 | `use_ood` | Open OnDemand と OpenComposer をインストールします。 |
 | `ood_dcv_enabled` | 検証用のAmazon DCVデスクトップと専用の`dcv`パーティションを有効化します。 |
@@ -149,7 +149,11 @@ HPC_OL8
 
 ## Autoscaling
 
-### 作成失敗の管理者通知
+### 管理者へのメール通知
+
+Resource Manager の「Autoscaling 管理者メール通知」で「管理者へのメール通知を有効化」を選び、共通の管理者メールアドレスを指定します。この1項目で、計算ノードの作成失敗通知と残存インスタンス監視が同時に有効になります。両方とも同じ OCI Notifications Topic / EMAIL Subscription を使います。残存監視の詳細は [検出ケース・導入・運用手順](docs/autoscaling-instance-monitor.md)を参照してください。
+
+既存の変数名 `autoscaling_failure_notifications_enabled` / `autoscaling_failure_admin_email` と Topic / Subscription のリソース名は維持しています。以前から管理者通知を有効にしているスタックも、この版を適用すると残存監視が追加されます。Plan で監視用の読み取り権限とプログラム配布を確認してください。管理者通知を無効にすると、作成失敗通知と残存監視をまとめて停止します。
 
 通知用の Dynamic Group と IAM Policy はテナンシのホームリージョンに作成し、Topic と EMAIL Subscription はデプロイ先リージョンに作成します。課金タグ・通常の IAM 自動作成・Slurm ジョブ通知をすべて無効にしても、作成失敗通知を有効にすればホームリージョンを取得します。
 
@@ -165,7 +169,7 @@ OCI CLI は PATH を優先し、見つからない場合は実行ユーザーの
 
 通知プログラムは Controller の Python 3.6 でも使える subprocess 引数で OCI CLI を呼び出します。旧版で `capture_output` の TypeError が出ていた環境は、`bin/autoscaling_failure_notify.py` を Controller の `/opt/oci-hpc/bin/` に更新してください。このエラーで停止した試行は未送信ファイルの保存前に止まるため、プログラム更新だけでは自動再送されません。保存した作成ログから `report` を再実行するか、更新後に失敗試験をやり直して確認します。
 
-スタックの「計算ノードの作成失敗を管理者へ通知」を有効にし、管理者メールアドレスを入力すると、専用の OCI Notifications Topic / EMAIL Subscription と Controller 用の Dynamic Group / publish 権限を作成します。Slurm ジョブ通知の設定とは独立しており、管理者は OCI Notifications から届く Subscription 確認メールを承認する必要があります。IAM の自動作成を使わない環境でも、この通知用リソースをスタックに作成するため、スタック実行者にはホームリージョンでの Dynamic Group / Policy 作成と対象 Compartment での Topic / Subscription 作成権限が必要です。Controller から OCI API へ HTTPS で到達できることも確認してください。
+スタックの「管理者へのメール通知を有効化」を有効にし、管理者メールアドレスを入力すると、専用の OCI Notifications Topic / EMAIL Subscription と Controller 用の Dynamic Group / publish 権限を作成します。Slurm ジョブ通知の設定とは独立しており、管理者は OCI Notifications から届く Subscription 確認メールを承認する必要があります。IAM の自動作成を使わない環境でも、この通知用リソースをスタックに作成するため、スタック実行者にはホームリージョンでの Dynamic Group / Policy 作成と対象 Compartment での Topic / Subscription 作成権限が必要です。Controller から OCI API へ HTTPS で到達できることも確認してください。
 
 作成が失敗すると、後始末の前に Controller が Terraform / Ansible ログと、該当リソースを特定できた場合の失敗 Work Request の error / log を収集します。メールにはクラスター、キュー、起点 Job ID、失敗箇所、作成ログのパスを記載します。Work Request を特定・取得できない場合は、その旨と Terraform / Ansible のエラーを記載します。`-DEBUG` で後始末を抑止した作成失敗も通知対象です。送信に失敗した通知は `/opt/oci-hpc/logs/autoscaling-failure-notifications/` に保持し、Controller の cron で毎分再試行します。送信失敗はクラスターの後始末を止めません。メール配信が成功したことは、作成失敗の繰り返しが止まったことを意味しません。
 
