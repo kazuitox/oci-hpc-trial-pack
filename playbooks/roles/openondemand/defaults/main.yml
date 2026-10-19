@@ -38,6 +38,8 @@ ood_host_regex: "(compute|desktop|vnc|dcv)-[\\w-]+"
 ood_shell_inactive_timeout_ms: 1800000
 # Seconds allowed for each selected folder's server-side recursive size check.
 ood_download_dir_timeout_seconds: 300
+# Decimal GB: 50 GB = 50,000,000,000 bytes.
+ood_file_transfer_max_bytes: 50000000000
 
 ood_desktop_use_gpu: false
 ood_vnc_vgl_group: vglusers

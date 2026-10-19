@@ -1,6 +1,13 @@
 ---
 servername: "{{ ood_servername }}"
 
+# Apache 2.4.54+ otherwise defaults to a 1 GiB request body limit.
+# Apache cannot express a 50 GB limit; Nginx and the Files UI enforce it.
+custom_vhost_directives:
+  - '<Location "/pun/sys/dashboard/files">'
+  - '  LimitRequestBody 0'
+  - '</Location>'
+
 oidc_crypto_passphrase: '{{ ood_oidc_passphrase.content | b64decode | trim }}'
 
 oidc_remote_user_claim: '{{ ood_oidc_remote_user_claim }}'
