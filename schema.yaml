@@ -254,6 +254,10 @@ variableGroups:
   - ${slurm_job_notifications_enabled}
   - ${slurm_notification_admin_email}
   visible: ${slurm}
+- title: Autoscaling 連続失敗時の停止
+  variables:
+  - ${autoscaling_failure_threshold}
+  visible: ${autoscaling}
 - title: Autoscaling 管理者メール通知
   variables:
   - ${autoscaling_failure_notifications_enabled}
@@ -1911,16 +1915,23 @@ variables:
     title: Slurm ジョブメール通知を有効化
     default: false
     description: OCI Notifications を使用して、Slurm ジョブの開始・終了・失敗をメールで通知できるようにします。Controller 専用の Dynamic Group と IAM Policy、初期ユーザー用 Topic と Subscription を作成します。slurm=true が必要です。初回デプロイ時に選択してください。既存スタックで true から false への変更はユーザー用通知リソースの終了処理となり、同じスタックでの再有効化は対象外です。通知を有効にしたまま region または targetCompartment を変更する移設も対象外です。
+  autoscaling_failure_threshold:
+    type: integer
+    title: 自動作成を停止する連続失敗回数（0で無効）
+    default: 3
+    minimum: 0
+    description: 全キューの自動作成を完了順に数えます。成功で回数をリセットし、指定回数に達すると手動再開まで新規作成を停止します。実行中ジョブと既存クラスターの削除は継続します。管理者メール通知とは独立しています。
+    visible: ${autoscaling}
   autoscaling_failure_notifications_enabled:
     type: boolean
     title: 管理者へのメール通知を有効化
     default: false
-    description: 計算ノードの作成失敗通知と残存インスタンス監視をまとめて有効にします。OCI Notifications の同じ Topic・通知先へ通知します。Slurm が必要です。Slurm ジョブ通知とは独立しています。
+    description: 自動作成の復旧、作成失敗、連続失敗のしきい値到達による自動作成停止、残存インスタンス監視の通知をまとめて有効にします。OCI Notifications の同じ Topic・通知先へ通知します。Slurm が必要です。Slurm ジョブ通知とは独立しています。
     visible: ${autoscaling}
   autoscaling_failure_admin_email:
     type: string
     title: 管理者メールアドレス（共通）
-    description: 作成失敗通知と残存インスタンス監視で共用する通知先です。OCI Notifications から届く Subscription 確認メールを承認してください。
+    description: 自動作成の復旧・作成失敗、連続失敗による停止、残存監視で共用する通知先です。OCI Notifications から届く Subscription 確認メールを承認してください。
     default: ''
     maxLength: 254
     pattern: '^(|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63})$'

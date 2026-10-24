@@ -383,7 +383,11 @@ if autoscaling == "true":
         cluster_to_build,cluster_to_destroy,nodes_to_destroy,cluster_building,cluster_destroying,used_index,current_nodes,building_nodes=getstatus_slurm()
 
         print (time.strftime("%Y-%m-%d %H:%M:%S"))
-        print (cluster_to_build,'cluster_to_build')
+        sys.path.insert(0, script_path)
+        from autoscaling_guard import scheduler_creation_requests
+        cluster_to_build = scheduler_creation_requests(cluster_to_build)
+        if cluster_to_build:
+            print(cluster_to_build, 'cluster_to_build')
         print (cluster_to_destroy,'cluster_to_destroy')
         print (nodes_to_destroy,'nodes_to_destroy')
         print (cluster_building,'cluster_building')
@@ -467,8 +471,7 @@ if autoscaling == "true":
             else:
                 current_nodes[queue][instance_type]+=nodes
                 clusterCount+=1
-                print ("Creating cluster "+clusterName+" with "+str(nodes)+" nodes")
-                subprocess.Popen([script_path+'/create_cluster.sh',str(nodes),clusterName,instance_type,queue,jobID,user])
+                subprocess.Popen([sys.executable,script_path+'/autoscaling_guard.py','run',str(nodes),clusterName,instance_type,queue,jobID,user])
                 time.sleep(5)
 
     except Exception:
