@@ -3,7 +3,7 @@ if [ $# -eq 0 ] || [ $# -eq 1 ]
 then
   echo "No enough arguments supplied, please supply number of nodes, cluster name, instance type, queue name, trigger Job ID and optional initial user tag value"
   echo "To avoid deleting clusters if an error occurs. Add -DEBUG as last argument"
-  exit
+  exit 1
 fi
 
 # --- debug 判定（従来通り） ---
@@ -29,8 +29,8 @@ conf_folder=$folder/../conf
 logs_folder=$folder/../logs
 queues_conf=$conf_folder/queues.conf
 
-cp -r $autoscaling_folder/tf_init $autoscaling_folder/clusters/$2
-cd $autoscaling_folder/clusters/$2
+cp -r "$autoscaling_folder/tf_init" "$autoscaling_folder/clusters/$2" || exit 1
+cd "$autoscaling_folder/clusters/$2" || exit 1
 
 # --- queues.conf から各種設定値を取得 ---
 shape=`yq eval ".queues.[] | select(.name == \"$4\") | .instance_types.[] | select(.name == \"$3\") | .shape " $queues_conf`
@@ -88,7 +88,7 @@ then
   echo "There wan't an instance type with name $3 in the queue $4 defined in the file $queues_conf"
   echo "Please fix it and rerun /opt/oci-hpc/bin.slurm_config.sh"
   rm -rf $autoscaling_folder/clusters/$2
-  exit
+  exit 1
 fi
 
 if [[ "$use_local_block_volume" != "true" && "$use_local_block_volume" != "false" ]]
@@ -139,6 +139,7 @@ do
   fi
 done
 
+status=1
 for ADName in $ADNames
 do
 
@@ -257,3 +258,6 @@ then
     echo "The cluster $2 will not be deleted as we are in debug mode"
   fi
 fi
+
+# Cleanup and notification results must not mask a failed creation.
+exit "$status"

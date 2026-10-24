@@ -1,6 +1,6 @@
 # OCI HPC Trial Pack
 
-[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/kazuitox/oci-hpc-trial-pack/archive/refs/tags/v1.5.0.zip)
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/kazuitox/oci-hpc-trial-pack/archive/refs/tags/v1.6.0.zip)
 
 本リポジトリは、Oracle Cloud Infrastructure (OCI) 上に HPC 環境を短時間で構築し、PoC や初期検証をすばやく開始することを目的としています。
 動作確認の中心は Oracle Linux 8 です。Ubuntu での動作確認報告も受けていますが、すべての OS・構成・更新経路の検証完了を示すものではありません。各リリースノートの確認範囲を参照し、利用する構成で個別に検証してください。
@@ -16,7 +16,7 @@ Resource Manager 用のルート構成は Terraform **1.5.x** を対象にして
 - フォルダをアップロードするときは、`versions.tf`、`schema.yaml`、`variables.tf` が直下にあるリポジトリのルートを選択します。`autoscaling/tf_init/` はコントローラ上で実行する別構成なので選択しません。
 - アップロード後、スタック作成画面の Terraform バージョンが **1.5.x** になっていることを確認します。`Invalid Terraform version: .` が表示された場合は、修正済みの `versions.tf` を含むフォルダを再選択し、作業ディレクトリとバージョン欄を確認してください。画面側で値が空のままの場合は、選択状態・アップロード結果を別途確認する必要があります。
 - 手動 ZIP を使う場合も、同じファイルを ZIP のルート（または明示した作業ディレクトリ）に置きます。`.git`、`.terraform`、Terraform state、秘密鍵、実環境ログを含めないでください。未コミットの修正を試す場合、`git archive HEAD` では変更内容や新規ファイルが入りません。
-- 上のデプロイボタンは v1.5.0 を使います。手動アップロードには [v1.5.0 Release](https://github.com/kazuitox/oci-hpc-trial-pack/releases/tag/v1.5.0) に添付した `oci-hpc-trial-pack-v1.5.0.zip` を使用できます。リポジトリ全体をフォルダ選択すると `.git` や Python キャッシュも含まれる場合があるため、コミット済みの構成は `git archive --format=zip --output=/tmp/oci-hpc-trial-pack.zip HEAD` で ZIP にしてください。未公開のローカル修正の試験には、未コミットの変更も含めた構成を用意してください。
+- 上のデプロイボタンは v1.6.0 を使います。手動アップロードには [v1.6.0 Release](https://github.com/kazuitox/oci-hpc-trial-pack/releases/tag/v1.6.0) に添付した `oci-hpc-trial-pack-v1.6.0.zip` を使用できます。リポジトリ全体をフォルダ選択すると `.git` や Python キャッシュも含まれる場合があるため、コミット済みの構成は `git archive --format=zip --output=/tmp/oci-hpc-trial-pack.zip HEAD` で ZIP にしてください。未公開のローカル修正の試験には、未コミットの変更も含めた構成を用意してください。
 
 この上限制約はルート構成をローカル CLI で実行する場合にも適用されます。一方、Autoscaling 用の `autoscaling/tf_init/versions.tf` は Resource Manager でのバージョン選択には使わず、従来どおり Terraform **1.5.0 以上**を許可します。コントローラ側の Terraform を 1.5 系へ固定する変更ではありません。
 
@@ -35,6 +35,10 @@ Resource Manager 用のルート構成は Terraform **1.5.x** を対象にして
 `queues.conf` の `instance_keyword` は、`e5` と `e5-lite` のように一方が他方の先頭部分になる値も使えます。修正版は Switch 名を完全一致で照合し、必要な一覧の取得・展開に失敗した場合は `topology.conf` を更新しません。既存のキーワード・ノード名・クラスター名を維持します。 hostlist の展開・圧縮では `SLURM_CLUSTERS` を子プロセスの環境から除外し、コントローラーの `SLURM_CONF` は保持します。
 
 既存コントローラーへの更新では、変更した Ansible タスクと `playbooks/library/slurm_topology.py` を一緒に配布してください。修正箇所、失敗時の動作、配布・切り戻し、フォーク元との違いは[調査・更新手順](docs/autoscaling-topology-identity.md)にまとめています。v1.3.3 の動作確認報告と検証範囲は[リリースノート](docs/releases/v1.3.3.md#検証結果と確認範囲)を参照してください。
+
+## v1.6.0への更新
+
+v1.6.0 は、Autoscaling の連続作成失敗による新規作成停止、状態確認・手動再開、停止・復旧通知を追加したリリースです。既定で3回の連続失敗後に自動作成が止まり、原因解消後に手動再開が必要です。`autoscaling_failure_threshold = 0` で無効にできます。実行中ジョブと既存クラスターの安全な削除は継続します。更新方法と確認範囲は [v1.6.0 リリースノート](docs/releases/v1.6.0.md)を参照してください。
 
 ## v1.5.0への更新
 
@@ -137,8 +141,8 @@ HPC_OL8
 | `login_node` | ユーザー用の追加 Login Node を作成します。 |
 | `slurm_ha` | バックアップ Slurm Controller を作成します。 |
 | `slurm_job_notifications_enabled` | OCI Notifications を使った Slurm ジョブメール通知を有効化します。デフォルトは `false`。 |
-| `autoscaling_failure_notifications_enabled` | 管理者メール通知を有効化します。計算ノードの作成失敗通知と残存インスタンス監視を同時に有効にし、同じ Topic・宛先へ通知します。Slurm が必要です。既存の変数名を維持し、デフォルトは `false`。 |
-| `autoscaling_failure_admin_email` | 作成失敗・残存監視で共用する管理者向け EMAIL Subscription の宛先です。Slurm ジョブ通知とは別の Topic / Subscription を使用します。 |
+| `autoscaling_failure_notifications_enabled` | 自動作成の復旧・作成失敗・連続失敗による停止・残存監視の通知を有効化し、同じ Topic・宛先へ通知します。Slurm が必要です。既存の変数名を維持し、デフォルトは `false`。 |
+| `autoscaling_failure_admin_email` | 自動作成の復旧・作成失敗、連続失敗による停止、残存監視で共用する管理者向け EMAIL Subscription の宛先です。Slurm ジョブ通知とは別の Topic / Subscription を使用します。 |
 | `slurm_notification_admin_email` | ローカル Controller ユーザー（通常は `opc`）のジョブ通知先メールアドレス。 |
 | `use_ood` | Open OnDemand と OpenComposer をインストールします。 |
 | `ood_dcv_enabled` | 検証用のAmazon DCVデスクトップと専用の`dcv`パーティションを有効化します。 |
@@ -155,9 +159,15 @@ HPC_OL8
 
 ### 管理者へのメール通知
 
-Resource Manager の「Autoscaling 管理者メール通知」で「管理者へのメール通知を有効化」を選び、共通の管理者メールアドレスを指定します。この1項目で、計算ノードの作成失敗通知と残存インスタンス監視が同時に有効になります。両方とも同じ OCI Notifications Topic / EMAIL Subscription を使います。残存監視の詳細は [検出ケース・導入・運用手順](docs/autoscaling-instance-monitor.md)を参照してください。
+Resource Manager の「Autoscaling 管理者メール通知」で「管理者へのメール通知を有効化」を選び、共通の管理者メールアドレスを指定します。この1項目で、自動作成の復旧・作成失敗・連続失敗による停止・残存インスタンス監視の通知が有効になります。同じ OCI Notifications Topic / EMAIL Subscription を使います。残存監視の詳細は [検出ケース・導入・運用手順](docs/autoscaling-instance-monitor.md)を参照してください。
 
-既存の変数名 `autoscaling_failure_notifications_enabled` / `autoscaling_failure_admin_email` と Topic / Subscription のリソース名は維持しています。以前から管理者通知を有効にしているスタックも、この版を適用すると残存監視が追加されます。Plan で監視用の読み取り権限とプログラム配布を確認してください。管理者通知を無効にすると、作成失敗通知と残存監視をまとめて停止します。
+既存の変数名 `autoscaling_failure_notifications_enabled` / `autoscaling_failure_admin_email` と Topic / Subscription のリソース名は維持しています。以前から管理者通知を有効にしているスタックも、この版を適用すると通知対象が増えます。Plan で監視用の読み取り権限とプログラム配布を確認してください。管理者通知を無効にすると、これらのメール通知をまとめて停止します。連続失敗による自動作成停止の判定は、メール通知とは独立して継続します。
+
+通常の作成成功ではメールを送りません。作成失敗の詳細は従来どおり通知し、失敗後に作成が成功して回数が0へ戻った場合は「Autoscaling の自動作成が復旧しました」を1回通知します。停止後の `resume` では復旧待ちの記録を保持し、その後に開始した作成の成功で復旧を通知します。再開コマンドの実行だけでは復旧メールを送りません。停止設定が `0`（無効）の間は失敗回数を更新しないため復旧も判定しません。失敗が n 回に達した時は「Autoscaling 自動作成を停止しました」を1回キューへ保存し、失敗回数と再開手順を通知します。停止後の定期実行で同じ停止通知は追加しません。
+
+復旧メールには「連続失敗回数: 2回 → 0回」のようにリセット前後の回数を記載します。手動再開を挟んだ場合は、再開前の回数を別項目として保持・通知し、再開後の失敗回数と区別します。
+
+復旧・停止の通知は結果が確定した時に既存の通知キューへ保存し、毎分の再送ワーカーが送信します。メールの到着時刻はワーカーの実行と OCI Notifications の配信状況によります。送信失敗時はキューを保持し、次回以降に再試行します。初回は Subscription 確認メールを承認してください。
 
 通知用の Dynamic Group と IAM Policy はテナンシのホームリージョンに作成し、Topic と EMAIL Subscription はデプロイ先リージョンに作成します。課金タグ・通常の IAM 自動作成・Slurm ジョブ通知をすべて無効にしても、作成失敗通知を有効にすればホームリージョンを取得します。
 
@@ -405,6 +415,69 @@ state 外のノードだけです。Terraform が管理する初期ノードを�
 ```text
 /opt/oci-hpc/autoscaling/clusters/<cluster_name>/currently_destroying
 ```
+
+## Autoscaling の連続失敗で自動作成を停止する
+
+デプロイ後は[コマンドで進める基本テスト手順](docs/autoscaling-guard-basic-test.md)で、復旧通知・連続失敗による停止・起動抑止・手動再開を順に確認できます。
+
+Resource Manager の「Autoscaling 連続失敗時の停止」で回数を指定すると、全キューの自動作成が
+指定回数連続で失敗した時点で、新規作成を停止します。Terraform では
+`autoscaling_failure_threshold = 3` のように指定します。既定値は `3` です。`0` を明示すると無効になります。
+管理者メール通知の有効・無効にかかわらず利用でき、追加の IAM 権限は不要です。
+
+作成スクリプトの終了結果を使うため、Terraform／Ansible の失敗、OCI の容量不足による作成失敗、
+スクリプトの構文エラーなどを数えます。AD を切り替える内部再試行はまとめて1件です。
+並行する作成は完了順に集計し、成功すると連続失敗回数が0に戻ります。回数と停止状態は
+Controller の `/opt/oci-hpc/autoscaling/guard/state.json` に保存します。
+
+停止後も実行中ジョブ、停止前に開始した作成、既存クラスターの安全な削除処理は継続します。
+停止前に開始した作成が後から成功しても、停止は解除しません。管理者メール通知が有効なら、
+既存の通知キューと再送ワーカーを使って復旧・停止を通知します。停止前に開始した作成が成功しても、メールは送らず停止を保持します。通知送信が失敗しても作成結果と停止状態は保持します。
+
+停止中の定期実行では、作成候補の一覧や `Creating cluster` を表示せず、`Automatic cluster creation is stopped; skipped n creation request(s).` と英語で表示します。定期実行ログには操作コマンドの案内を出しません。対話用の `status` / `resume` とメールは日本語です。既存クラスターの削除処理は継続します。定期実行の確認後に停止状態が変わる場合に備え、起動直前にも guard が再確認します。
+
+Controller 上で、普段 Autoscaling を実行している `opc` または `ubuntu` ユーザーとして状態を確認します。
+
+```bash
+/opt/oci-hpc/bin/autoscaling_guard.py status
+```
+
+実行権限はデプロイ時に設定します。表示とメールに案内された管理ユーザー（`opc` / `ubuntu`）にて、`sudo` を付けずに実行してください。管理ユーザー名はデプロイ時の `local.controller_username` から設定ファイルへ渡します。旧設定には設定ファイル所有者を使います。
+
+通常は日本語で、受付可能／停止中、連続失敗回数、停止しきい値、対処を表示します。全角文字の表示幅を考慮して項目名を揃え、コロンの後ろをタブで区切って値の開始位置を統一します。
+「最後に記録した作成試行」のクラスター名・キュー・インスタンスタイプは、診断用の記録です。
+停止判定の対象を指定する値ではなく、この Controller の全キュー・全タイプで回数を共通管理します。
+別キューで作成が成功した場合も回数は0に戻ります。停止後は停止を起こした試行の記録を保持します。
+クラスター名は作成を試みたクラスターの識別名で、現在存在することや稼働中であることを示しません。
+対応する `/opt/oci-hpc/logs/create_<cluster>_*.log` を調べ、原因を解消してから再開します。
+
+JSON が必要な場合はデバッグオプションを付けます。従来の JSON を読み取るスクリプトもこちらへ変更してください。
+
+```bash
+/opt/oci-hpc/bin/autoscaling_guard.py status --debug
+```
+
+回数が予想外に変化した場合は、`--debug` の `last_reset`（最後に0へリセットした理由・時刻・変更前の回数）を確認します。`creation_succeeded` は作成プロセスの成功終了、`manual_resume` は再開コマンドによるリセットです。定期実行ログには `Autoscaling guard attempt` / `Autoscaling guard result` として試行ID・PID・クラスター名・UTC時刻・終了コード・回数の変更前後を記録します。同じクラスター名を再利用した場合も試行IDで区別できます。状態ファイル不在からの初期化は `reason=missing_state_file` と記録します。これらの診断記録は導入後の実行が対象です。
+
+```bash
+/opt/oci-hpc/bin/autoscaling_guard.py resume
+```
+
+再開すると回数が0になり、次回の定期実行から自動作成を受け付けます。再開前に開始した作成の結果は、
+再開後の回数に加えません。しきい値を変更するだけでは停止を解除しません。
+`0` に変更すると停止判定を無効化しますが、保存済みの停止状態は残るため、再び有効にする際は状態を確認してください。
+
+既存スタックで `autoscaling_failure_threshold=0` を保存済みの場合は、既定値変更だけでは有効になりません。利用する回数（例えば `3`）へ入力値を変更してください。
+
+既存スタックは構成 ZIP を更新して Plan / Apply すると、Controller に設定とスクリプトを配布します。
+この配布は計算インスタンスの置換や構築 playbook の再実行を要求しません。実際の変更範囲は Plan で確認してください。
+HA 構成では primary / backup の両方へ配布し、回数と停止状態は Controller ごとに管理します。
+切り替え先へ停止状態は同期しません。HA 全体を止める場合は両 Controller の状態を管理する必要があります。
+
+手動の `create_cluster.sh`、削除・resize、定期実行スクリプト自体の例外は集計対象外です。
+作成処理が終了しない間も失敗件数にはなりません。Terraform のタイムアウトと、既存の残存監視を併用してください。
+設定や状態が壊れた場合は自動作成を拒否してログへ記録します。旧環境との互換性のため、
+設定ファイルが存在しない場合は従来どおり停止判定を無効として動作します。
 
 ## Autoscaling モニタリング
 
